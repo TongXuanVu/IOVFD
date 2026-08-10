@@ -122,6 +122,45 @@ def has_checkpoint(out_dir):
     return bool(glob.glob(os.path.join(out_dir, "checkpoints*", "latest.pth")))
 
 
+def checkpoint_round(out_dir):
+    """So round ghi trong latest.pth. Import torch muon vi thuong khong can toi."""
+    cands = sorted(glob.glob(os.path.join(out_dir, "checkpoints*", "latest.pth")))
+    if not cands:
+        return 0
+    try:
+        import torch
+        blob = torch.load(cands[0], map_location="cpu", weights_only=False)
+        return int(blob.get("round", 0)) if isinstance(blob, dict) else 0
+    except Exception as e:                                    # pragma: no cover
+        print(f"Khong doc duoc {cands[0]}: {e}")
+        return 0
+
+
+def detect_progress(out_dir, tasks, rounds_per_task, done_rounds=None):
+    """Tra ve ({task: so round da xong}, mo ta cach suy ra).
+
+    Uu tien dem tu metrics CSV vi no chinh xac cho TUNG task. Neu khong co CSV
+    (vd chi nhan duoc moi file .pth tu nguoi khac) thi suy tu tong so round ghi
+    trong latest.pth: round danh lien tuc nen task thu i chiem khoang
+    [i*R, (i+1)*R).
+
+    CANH BAO: cach suy nay chi dung neu nguoi chay truoc dung CUNG mot --rounds.
+    """
+    prog = {t: rounds_done(out_dir, t) for t in tasks}
+    if any(prog.values()):
+        return prog, "dem so dong trong metrics CSV"
+
+    total = done_rounds if done_rounds is not None else checkpoint_round(out_dir)
+    if not total:
+        return prog, "chua co gi"
+
+    for i, t in enumerate(tasks):
+        prog[t] = max(0, min(rounds_per_task, total - i * rounds_per_task))
+    nguon = ("--done-rounds" if done_rounds is not None else "latest.pth")
+    return prog, (f"suy tu {nguon} = {total} round tong cong, gia dinh "
+                  f"{rounds_per_task} round/task")
+
+
 def run_one_task(pdir, port, args, task, mode, client_ids, rounds):
     """Chay 1 task: 1 server + len(client_ids) client, cho den khi server thoat."""
     addr = f"127.0.0.1:{port}"
@@ -202,6 +241,10 @@ def main():
     p.add_argument("--cm-every", type=int, default=0,
                    help="Ghi confusion matrix moi N round (0 = chi ghi cuoi task). "
                         "Dat > 0 neu so bi cat giua chung truoc khi task ket thuc")
+    p.add_argument("--done-rounds", type=int, default=None,
+                   help="Khai bao thang da chay xong bao nhieu round TONG CONG. "
+                        "Dung khi nhan checkpoint tu nguoi khac ma khong co CSV, "
+                        "hoac khi so round trong latest.pth khong dang tin")
     p.add_argument("--restart", action="store_true",
                    help="Bo qua ket qua cu, bat dau lai tu dau. Mac dinh la CHAY TIEP "
                         "tu cho lan truoc dung — chay lai dung lenh cu la di tiep")
@@ -256,11 +299,17 @@ def main():
                      f"Xoa thu muc do, hoac dung --out-dir khac, de khong ghi de nham.")
         progress = {t: 0 for t in tasks}
     else:
-        progress = {t: rounds_done(args.out_dir, t) for t in tasks}
+        progress, nguon = detect_progress(args.out_dir, tasks, args.rounds,
+                                          args.done_rounds)
         if any(progress.values()):
             done_txt = ", ".join(f"task{t}={progress[t]}/{args.rounds}"
                                  for t in tasks if progress[t])
-            print(f"Tiep tuc : {done_txt}")
+            print(f"Tiep tuc : {done_txt}   [{nguon}]")
+            if "suy tu" in nguon:
+                print("           LUU Y: khong co metrics CSV cua phan da chay. "
+                      "Model chay tiep dung, nhung file CSV o day se THIEU cac "
+                      "round truoc — xin ca thu muc out cua nguoi chay truoc "
+                      "neu can du 150 dong.")
 
     t_start = time.time()
     failed = []
