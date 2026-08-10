@@ -1,0 +1,5 @@
+flwr>=1.5
+torch>=1.13
+numpy>=1.23,<2
+scikit-learn>=1.1
+matplotlib>=3.5
