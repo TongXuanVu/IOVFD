@@ -199,6 +199,29 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     print(f"Gop {len(runs)} lan chay -> {os.path.abspath(args.out_dir)}\n")
 
+    # --- gop 5 file metrics_task*.csv thanh MOT file lien tuc theo round ---
+    # (30 round/task x 5 task = 150 dong, 11 metric + cot round + cot task)
+    for label, run_dir in runs.items():
+        files = find_metric_files(run_dir)
+        if not files:
+            continue
+        merged = []
+        for task in sorted(files, key=lambda k: (k is not None, k)):
+            for rec in read_metrics_csv(files[task]):
+                merged.append({"round": rec["round"],
+                               "task": "gop" if task is None else task,
+                               **{k: rec[k] for k in METRIC_KEYS}})
+        if not merged:
+            continue
+        merged.sort(key=lambda r: r["round"])
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", label)
+        path = os.path.join(args.out_dir, f"metrics_all_{safe}.csv")
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=["round", "task"] + METRIC_KEYS)
+            w.writeheader()
+            w.writerows(merged)
+        print(f"[{label}] gop {len(merged)} dong -> {os.path.basename(path)}")
+
     # --- summary: metric cuoi cung cua tung task ---
     summary_rows = []
     for label, run_dir in runs.items():
