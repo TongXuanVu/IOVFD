@@ -23,6 +23,20 @@ cd IOVFD
 pip install -r requirements.txt
 ```
 
+### Trên Kaggle — clone đúng repo này là chạy được
+
+```python
+!git clone -q https://github.com/TongXuanVu/IOVFD.git /kaggle/working/IOVFD
+!pip install -q flwr
+CODE = "/kaggle/working/IOVFD"
+DATA = "/kaggle/input/iov-100client"      # Kaggle Dataset chứa federated_data/
+
+!cd {CODE} && python run_fl.py --data-dir {DATA} --clients 10 --rounds 20
+```
+
+Kaggle đã có sẵn torch / numpy / scikit-learn / matplotlib, chỉ thiếu `flwr`.
+Repo này không phụ thuộc ba repo kia — không cần clone thêm gì.
+
 ## Chạy
 
 Cần **1 server + N client**. Muốn chạy tay thì mở N+1 terminal, server trước:
@@ -113,11 +127,25 @@ nạp lại được, confusion matrix có sinh ra, và cả `--mode test` lẫn
 Bài gốc **không công bố source code**. Mọi con số phải tự đo lại, không kỳ vọng
 khớp bảng kết quả trong bài.
 
-## Ghi chú về code dùng chung
+## Sửa code
 
-`common.py` và `model_cnn1d.py` giống hệt ở cả 4 repo (cố ý — bốn bài phải dùng
-chung backbone thì so sánh mới công bằng). Sửa một nơi thì phải đồng bộ cả 4;
-`check_shared.py` đối chiếu hash giúp phát hiện lệch bản:
+Repo này là **nguồn gốc của chính nó**. Sửa thẳng ở đây, không có bước build
+trung gian nào cả. Sửa repo này không đụng gì tới ba repo kia.
+
+```bash
+# sửa file...
+push.bat "sua gi do"        # Windows
+./push.sh "sua gi do"       # Linux/Mac
+```
+
+### Về `common.py` và `model_cnn1d.py`
+
+Hai file này ban đầu giống hệt ở cả 4 repo — bốn bài dùng chung backbone thì so
+sánh mới công bằng. Khi bạn sửa riêng ở đây, chúng sẽ lệch dần so với ba repo
+kia. **Đó là đánh đổi có chủ đích** để bốn repo độc lập thật sự.
+
+Nhưng nếu đang so sánh kết quả giữa bốn bài thì backbone lệch nhau sẽ làm phép
+so sánh mất giá trị. Kiểm tra trước khi kết luận:
 
 ```bash
 python check_shared.py --against ../VANFED-IDS
