@@ -13,8 +13,27 @@ lien tuc, dung de do muc do quen giua cac task.
 
 Truoc khi chay se KIEM TRA client nao thuc su co file cua task do — bo qua
 client thieu du lieu thay vi de server treo cho mai (bo 10client bi thua).
+
+CHAY TIEP KHI BI CAT GIUA CHUNG (mac dinh)
+------------------------------------------
+Kaggle het gio thi tien trinh bi giet bat cu luc nao. Moi round deu da ghi
+xuong dia ngay (metrics CSV, checkpoint, log), nen khong mat gi.
+
+Session sau, chay LAI DUNG LENH CU:
+
+  - dem so dong trong metrics CSV de biet moi task da chay duoc bao nhieu round
+  - task nao du round -> bo qua
+  - task dang do -> `--mode resume`, chi chay so round CON THIEU
+  - so round van danh lien tuc, CSV khong co dong trung
+
+Muon lam lai tu dau thi them `--restart` (se bao loi neu out-dir da co ket qua,
+de khong lo tay ghi de).
+
+`--cm-every N` ghi confusion matrix moi N round thay vi chi ghi o cuoi task —
+nen dat neu ban biet mot session khong chay het duoc mot task.
 """
 import argparse
+import glob
 import os
 import shlex
 import subprocess
@@ -75,7 +94,35 @@ def spawn(cmd, cwd, log_path, prefix=None):
     return proc, th
 
 
-def run_one_task(pdir, port, args, task, mode, client_ids):
+def rounds_done(out_dir, task):
+    """So round da chay xong cho task nay, dem tu file metrics CSV.
+
+    Doc CSV chu khong doc checkpoint de khong phai import torch trong launcher.
+    CSV duoc ghi sau checkpoint trong cung mot round, nen con so nay bang hoac
+    thap hon checkpoint dung MOT round -> resume cung lam lai nhieu nhat 1 round,
+    khong bao gio nhay mat round nao.
+    """
+    if task is None:
+        cands = [p for p in glob.glob(os.path.join(out_dir, "metrics*.csv"))
+                 if "task" not in os.path.basename(p)
+                 and not os.path.basename(p).startswith("test_")]
+    else:
+        cands = glob.glob(os.path.join(out_dir, f"metrics*task{task}.csv"))
+    n = 0
+    for p in cands:
+        try:
+            with open(p, encoding="utf-8") as f:
+                n = max(n, sum(1 for _ in f) - 1)      # tru dong header
+        except OSError:
+            pass
+    return max(n, 0)
+
+
+def has_checkpoint(out_dir):
+    return bool(glob.glob(os.path.join(out_dir, "checkpoints*", "latest.pth")))
+
+
+def run_one_task(pdir, port, args, task, mode, client_ids, rounds):
     """Chay 1 task: 1 server + len(client_ids) client, cho den khi server thoat."""
     addr = f"127.0.0.1:{port}"
     logs = os.path.join(args.out_dir, "_logs")
@@ -83,16 +130,18 @@ def run_one_task(pdir, port, args, task, mode, client_ids):
     sfx = "flat" if task is None else f"task{task}"
 
     server_cmd = [PY, "server_iov.py", "--mode", mode, "--address", addr,
-                  "--rounds", str(args.rounds), "--num-clients", str(len(client_ids)),
+                  "--rounds", str(rounds), "--num-clients", str(len(client_ids)),
                   "--data-dir", args.data_dir, "--out-dir", args.out_dir,
                   "--local-epochs", str(args.local_epochs),
                   "--test-samples", str(args.test_samples)]
     if task is not None:
         server_cmd += ["--task", str(task)]
+    if args.cm_every:
+        server_cmd += ["--cm-every", str(args.cm_every)]
     server_cmd += args.server_extra
 
     print(f"\n{'=' * 70}\n[{sfx}] mode={mode} | {len(client_ids)} client | "
-          f"{args.rounds} round\n{'=' * 70}", flush=True)
+          f"{rounds} round\n{'=' * 70}", flush=True)
     srv, srv_th = spawn(server_cmd, pdir, os.path.join(logs, f"server_{sfx}.log"), "|")
     time.sleep(args.server_warmup)
 
@@ -150,6 +199,12 @@ def main():
                    help="Giay cho server nap global test truoc khi bat client")
     p.add_argument("--client-stagger", type=float, default=1.0)
     p.add_argument("--timeout", type=int, default=20_000, help="Giay cho MOI task")
+    p.add_argument("--cm-every", type=int, default=0,
+                   help="Ghi confusion matrix moi N round (0 = chi ghi cuoi task). "
+                        "Dat > 0 neu so bi cat giua chung truoc khi task ket thuc")
+    p.add_argument("--restart", action="store_true",
+                   help="Bo qua ket qua cu, bat dau lai tu dau. Mac dinh la CHAY TIEP "
+                        "tu cho lan truoc dung — chay lai dung lenh cu la di tiep")
     # PHAI dung dang co dau BANG: --server-extra="--arch rnn"
     # Neu viet --server-extra "--arch rnn" thi argparse tuong "--arch" la mot
     # option moi va bao loi "expected one argument".
@@ -191,9 +246,32 @@ def main():
     print(f"Ket qua : {args.out_dir}")
     print(f"Task    : {tasks} | {args.rounds} round/task | pool {len(pool)} client")
 
+    # --- tiep tuc tu lan chay truoc (mac dinh) ---------------------------------
+    # Kaggle het gio giua chung -> chay LAI DUNG LENH CU la di tiep tu cho do,
+    # khong lam lai tu dau, khong ghi trung dong vao CSV.
+    if args.restart:
+        stale = [t for t in tasks if rounds_done(args.out_dir, t) > 0]
+        if stale:
+            sys.exit(f"--restart nhung {args.out_dir} da co ket qua cua task {stale}.\n"
+                     f"Xoa thu muc do, hoac dung --out-dir khac, de khong ghi de nham.")
+        progress = {t: 0 for t in tasks}
+    else:
+        progress = {t: rounds_done(args.out_dir, t) for t in tasks}
+        if any(progress.values()):
+            done_txt = ", ".join(f"task{t}={progress[t]}/{args.rounds}"
+                                 for t in tasks if progress[t])
+            print(f"Tiep tuc : {done_txt}")
+
     t_start = time.time()
     failed = []
     for i, task in enumerate(tasks):
+        done = progress.get(task, 0)
+        if done >= args.rounds:
+            print(f"[task {task}] da xong {done}/{args.rounds} round — bo qua",
+                  flush=True)
+            continue
+        remaining = args.rounds - done
+
         ids = clients_with_data(args.data_dir, pool, task)
         if not ids:
             print(f"[task {task}] KHONG client nao co du lieu — bo qua", flush=True)
@@ -202,8 +280,10 @@ def main():
         if len(ids) < len(pool):
             print(f"[task {task}] chi {len(ids)}/{len(pool)} client co du lieu: {ids}",
                   flush=True)
-        mode = "train" if i == 0 else "resume"
-        rc = run_one_task(pdir, port, args, task, mode, ids)
+        # Co checkpoint roi thi LUON resume — ke ca task dau tien — vi co the
+        # session truoc da chay do dang chinh task nay.
+        mode = "resume" if has_checkpoint(args.out_dir) else "train"
+        rc = run_one_task(pdir, port, args, task, mode, ids, remaining)
         if rc != 0:
             print(f"[task {task}] server thoat voi ma {rc}", flush=True)
             failed.append(task)
