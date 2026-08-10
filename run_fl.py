@@ -241,6 +241,11 @@ def main():
     p.add_argument("--cm-every", type=int, default=0,
                    help="Ghi confusion matrix moi N round (0 = chi ghi cuoi task). "
                         "Dat > 0 neu so bi cat giua chung truoc khi task ket thuc")
+    p.add_argument("--require-all-tasks", action="store_true",
+                   help="Chi dung client co DU shard cua moi task se chay, de so "
+                        "client co dinh giua cac task. Mac dinh (khong bat co nay): "
+                        "moi task dung tat ca client co du lieu cua rieng no, nen "
+                        "so client thay doi theo task")
     p.add_argument("--done-rounds", type=int, default=None,
                    help="Khai bao thang da chay xong bao nhieu round TONG CONG. "
                         "Dung khi nhan checkpoint tu nguoi khac ma khong co CSV, "
@@ -284,10 +289,27 @@ def main():
         tasks = [int(t) for t in args.tasks.replace(" ", "").split(",")]
 
     pool = args.client_ids if args.client_ids else list(range(args.clients))
+
+    # So client co du lieu THUONG KHAC NHAU giua cac task (co client khong co
+    # shard cua task do). Mac dinh: moi task dung dung nhung client co du lieu
+    # -> so client thay doi theo task, phai ghi ro khi bao cao ket qua.
+    # --require-all-tasks: chi giu client co DU tat ca cac task se chay, de so
+    # client co dinh -> so sanh giua cac task cong bang hon, doi lai it client hon.
+    per_task = {t: clients_with_data(args.data_dir, pool, t) for t in tasks}
+    if args.require_all_tasks:
+        common = [c for c in pool if all(c in per_task[t] for t in tasks)]
+        if not common:
+            sys.exit("--require-all-tasks: khong client nao co du tat ca cac task. "
+                     "Bo co nay, hoac mo rong --clients / --client-ids.")
+        print(f"Loc   : giu {len(common)}/{len(pool)} client co du {len(tasks)} task: {common}")
+        per_task = {t: list(common) for t in tasks}
+
     print(f"Project : {args.project or pdir_name}")
     print(f"Du lieu : {args.data_dir}")
     print(f"Ket qua : {args.out_dir}")
     print(f"Task    : {tasks} | {args.rounds} round/task | pool {len(pool)} client")
+    print("Client co du lieu tung task: "
+          + ", ".join(f"task{t}={len(per_task[t])}" for t in tasks))
 
     # --- tiep tuc tu lan chay truoc (mac dinh) ---------------------------------
     # Kaggle het gio giua chung -> chay LAI DUNG LENH CU la di tiep tu cho do,
@@ -321,7 +343,7 @@ def main():
             continue
         remaining = args.rounds - done
 
-        ids = clients_with_data(args.data_dir, pool, task)
+        ids = per_task[task]
         if not ids:
             print(f"[task {task}] KHONG client nao co du lieu — bo qua", flush=True)
             failed.append(task)
