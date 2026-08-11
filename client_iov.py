@@ -4,9 +4,21 @@ Bai bao: Cao, Di, Jin, FGCS 183 (2026).
 
 "Dual knowledge distillation" gom hai chieu:
   - Tai CLIENT (file nay): model global lam GIAO VIEN cho model local.
-        L = FocalLoss(local(x), y) + lambda_kd * KL(local(x) || global(x))
+        Eq. (29):  L_LM = L_student + lambda_2 * L_kd
+        Eq. (27):  L_student = CE(ST(1)LM, y)          <- nhan THAT
+        Eq. (28):  L_kd      = KL(ST(t)LM, ST(t)GM)
+    Bai dat lambda_2 = 0.2.
     Model local KHONG bi ghi de boi trong so global -> giu tinh ca nhan hoa,
-    day la diem khac FedAvg. Global chi vao qua so hang KL.
+    day la diem khac FedAvg. Global chi vao qua so hang KL. Dau ra cua
+    Algorithm 1 la CHINH cac model local nay, khong phai global.
+
+TRANG THAI CUC BO PHAI GHI RA DIA
+---------------------------------
+Trong che do simulation cua Flower, doi tuong client bi TAO LAI moi round nen
+self.model khong song sot — model "ca nhan hoa" se bi dung lai tu dau moi
+round, tuc co che loi cua bai bi hong AM THAM. Truoc day run_sim.py chan han
+P3 bang sys.exit() vi ly do do. Nay trang thai duoc luu vao --state-dir nen
+chay simulation duoc, va co kiem chung trong smoke_test.
   - Tai SERVER (server_iov.py): ensemble cac model local lam giao vien cho
     global, chung cat tren pseudo-data do generator sinh (data-free).
 
@@ -39,13 +51,18 @@ DEFAULT_DATA_DIR = r"C:\FederatedLearning\AFSIC-IOV\data\100client"
 
 class IoVFDClient(fl.client.NumPyClient):
     def __init__(self, client_id, data_dir, device, max_samples, batch_size,
-                 task, lr, dropout, lambda_kd, temperature, personalized):
+                 task, lr, dropout, lambda_kd, temperature, personalized,
+                 state_dir=None, pretrain_epochs=1):
         self.cid = client_id
         self.device = device
         self.lr = lr
         self.lambda_kd = lambda_kd
         self.T = temperature
         self.personalized = personalized
+        self.state_dir = state_dir
+        self.pretrain_epochs = pretrain_epochs
+        self.task = task
+        self.da_nap_cuc_bo = False
 
         x, y = C.load_client_data(data_dir, client_id, task, max_samples)
         self.loader = C.make_loader(x, y, batch_size, shuffle=True)
@@ -56,6 +73,45 @@ class IoVFDClient(fl.client.NumPyClient):
         self.model = CNN1D_IDS(INPUT_LEN, NUM_GLOBAL_CLASSES, dropout).to(device)
         self.teacher = CNN1D_IDS(INPUT_LEN, NUM_GLOBAL_CLASSES, dropout).to(device)
         self.criterion = FocalLoss(alpha=C.make_focal_alpha(y).to(device), gamma=2.0)
+
+    # ---- trang thai cuc bo (song sot qua viec Ray tao lai client) ---------
+    def _state_path(self):
+        ten = "flat" if self.task is None else f"task{self.task}"
+        return os.path.join(self.state_dir, f"client_{self.cid}_{ten}.npz")
+
+    def _load_local(self):
+        if not self.state_dir or not os.path.exists(self._state_path()):
+            return None
+        try:
+            with np.load(self._state_path()) as z:
+                return [z[f"a{i}"] for i in range(len(z.files))]
+        except Exception as e:
+            logger.warning(f"[Client {self.cid}] khong doc duoc trang thai: {e}")
+            return None
+
+    def _save_local(self):
+        if not self.state_dir:
+            return
+        os.makedirs(self.state_dir, exist_ok=True)
+        np.savez(self._state_path(),
+                 **{f"a{i}": a for i, a in
+                    enumerate(C.get_model_parameters(self.model))})
+
+    def _pretrain(self):
+        """Algorithm 1 dong 2: local model duoc PRETRAIN truoc vong FL.
+
+        Chi CE tren du lieu cuc bo, chua co giao vien nao.
+        """
+        opt = optim.Adam(self.model.parameters(), lr=self.lr)
+        self.model.train()
+        for _ in range(self.pretrain_epochs):
+            for xb, yb in self.loader:
+                xb, yb = xb.to(self.device).float(), yb.to(self.device)
+                opt.zero_grad()
+                self.criterion(self.model(xb), yb).backward()
+                opt.step()
+        logger.info(f"[Client {self.cid}] pretrain {self.pretrain_epochs} epoch "
+                    f"(Algorithm 1 dong 2)")
 
     # ---- Flower API -------------------------------------------------------
     def get_parameters(self, config):
@@ -73,9 +129,28 @@ class IoVFDClient(fl.client.NumPyClient):
         for q in self.teacher.parameters():
             q.requires_grad_(False)
 
-        # round 0 hoac che do khong ca nhan hoa: khoi tao local tu global
-        if rnd <= 1 or not self.personalized:
-            self.model.load_state_dict(C.ndarrays_to_state_dict(self.model, parameters))
+        # Model local phai LIEN TUC qua cac round. Uu tien nap tu dia; chi khi
+        # chua co gi (round dau) moi khoi tao tu global.
+        # Ba truong hop, theo thu tu uu tien:
+        #  1. Co trang thai tren dia  -> nap (che do simulation, doi tuong moi)
+        #  2. Round dau / tat ca nhan hoa -> khoi tao tu global
+        #  3. Con lai -> GIU NGUYEN self.model dang co trong bo nho
+        # Truong hop 3 la duong gRPC khi khong dat --state-dir: doi tuong
+        # client van song nen model cuc bo nam san trong bo nho. Bo qua no se
+        # lam global ghi de model local MOI ROUND, tuc hong dung co che cua
+        # bai theo huong nguoc lai.
+        truoc = self._load_local() if self.personalized else None
+        if truoc is not None:
+            self.model.load_state_dict(C.ndarrays_to_state_dict(self.model, truoc))
+            self.da_nap_cuc_bo = True
+        elif rnd <= 1 or not self.personalized:
+            self.model.load_state_dict(
+                C.ndarrays_to_state_dict(self.model, parameters))
+            self.da_nap_cuc_bo = False
+            if self.pretrain_epochs > 0 and self.personalized:
+                self._pretrain()
+        else:
+            self.da_nap_cuc_bo = True          # tiep model dang co trong bo nho
 
         self.model.train()
         opt = optim.Adam(self.model.parameters(), lr=lr)
@@ -96,10 +171,13 @@ class IoVFDClient(fl.client.NumPyClient):
                 n_batches += 1
 
         nb = max(n_batches, 1)
+        self._save_local()
         logger.info(f"[Client {self.cid}][Round {rnd}] n={self.n_samples} "
-                    f"ce={sum_ce / nb:.4f} kd={sum_kd / nb:.4f} (lambda={lam})")
+                    f"ce={sum_ce / nb:.4f} kd={sum_kd / nb:.4f} (lambda={lam})"
+                    + (" | tiep model cuc bo" if self.da_nap_cuc_bo else ""))
         return (C.get_model_parameters(self.model), self.n_samples,
                 {"train_loss": sum_ce / nb, "kd_loss": sum_kd / nb,
+                 "resumed_local": int(self.da_nap_cuc_bo),
                  "label_counts": ",".join(map(str, self.label_counts))})
 
     def evaluate(self, parameters, config):
@@ -114,10 +192,14 @@ def main():
     p.add_argument("--max-samples", type=int, default=500_000)
     p.add_argument("--batch-size", type=int, default=32,
                    help="Bai bao dung batch=32")
-    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--lr", type=float, default=1e-4, help="Bai dat 0.0001")
     p.add_argument("--dropout", type=float, default=0.15)
-    p.add_argument("--lambda-kd", type=float, default=1.0,
-                   help="Trong so KL(local || global)")
+    p.add_argument("--lambda-kd", type=float, default=0.2,
+                   help="lambda_2 cua Eq.(29). Bai dat 0.2")
+    p.add_argument("--state-dir", type=str, default=None,
+                   help="Noi luu model cuc bo. BAT BUOC o che do simulation")
+    p.add_argument("--pretrain-epochs", type=int, default=1,
+                   help="Algorithm 1 dong 2: pretrain local truoc vong FL")
     p.add_argument("--temperature", type=float, default=3.0)
     p.add_argument("--no-personalized", action="store_true",
                    help="Ghi de local bang global moi round (thanh FedAvg + KD)")
@@ -129,7 +211,9 @@ def main():
     client = IoVFDClient(args.client_id, args.data_dir, device, args.max_samples,
                          args.batch_size, args.task, args.lr, args.dropout,
                          args.lambda_kd, args.temperature,
-                         personalized=not args.no_personalized)
+                         personalized=not args.no_personalized,
+                         state_dir=args.state_dir,
+                         pretrain_epochs=args.pretrain_epochs)
     fl.client.start_client(server_address=args.server, client=client.to_client())
 
 

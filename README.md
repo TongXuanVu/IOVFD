@@ -13,7 +13,35 @@ Ba repo anh em: [VANFED-IDS](https://github.com/TongXuanVu/VANFED-IDS) ·
 
 ## Ý tưởng được tái hiện
 
-Chưng cất tri thức hai chiều. Tại client: model global làm giáo viên cho model local (`L = Focal + λ·KL`), model local không bị ghi đè nên giữ tính cá nhân hoá. Tại server: ensemble các model local làm giáo viên cho global, chưng cất trên pseudo-data do generator sinh — không dùng dữ liệu thật. Nhiễu lấy từ hệ hỗn loạn thay vì `torch.randn`.
+| Thành phần của bài | Ở đâu | Trạng thái |
+|---|---|---|
+| Eq. (9) `p(y)` từ tần suất nhãn client | `server_iov.py: aggregate_fit` | ✅ |
+| Eq. (10)+(12) nhãn mềm `y*` từ hệ hỗn loạn | `generator.py: noisy_onehot` | ✅ |
+| Eq. (14)-(16) generator Linear → 3×(MultiHead+Conv1D) → Linear | `generator.py: Generator` | ✅ |
+| Eq. (18) `L_kl_same` khớp nhãn **mềm** | `generator.py: kl_to_soft_label` | ✅ |
+| Eq. (19) `L_dis` đa dạng theo khoảng cách nhãn | `generator.py: diversity_loss` | ✅ |
+| Eq. (20) `L_G = L_kl_same + L_dis` | `server_iov.py: _distill` | ✅ |
+| Eq. (26) `L_GM = CE + λ₁·KL` | `server_iov.py: _distill` | ✅ |
+| Eq. (29) `L_LM = CE + λ₂·KL` | `client_iov.py: fit` | ✅ |
+| Algorithm 1 dòng 2 — pretrain local | `client_iov.py: _pretrain` | ✅ |
+| Algorithm 1 dòng 10 — model local bền vững qua round | `client_iov.py` + `--state-dir` | ✅ |
+| λ₁ = λ₂ = 0.2, lr 1e-4, batch 32 | mặc định | ✅ |
+| ECDSA, kênh mã hoá | — | ❌ không có |
+
+## Chạy — một lệnh
+
+```bash
+python main.py --data_dir <DATA> --num_users 100
+```
+
+Mặc định đã là chế độ của bài. Đối chứng từng thành phần:
+
+```bash
+python main.py --data_dir <DATA> --no_personalized   # bỏ chưng cất global→local
+python main.py --data_dir <DATA> --kd_steps 0        # bỏ chưng cất local→global
+python main.py --data_dir <DATA> --fedavg_init       # thêm FedAvg (bài không có)
+python main.py --data_dir <DATA> --noise_mode boxmuller   # Gauss thật
+```
 
 ## Cài đặt
 
@@ -121,6 +149,62 @@ nạp lại được, confusion matrix có sinh ra, và cả `--mode test` lẫn
 **Trạng thái:** **Đã chạy thật và đạt** trên dữ liệu giả: vòng generator↔student chạy đủ, checkpoint lưu kèm trọng số generator nên resume được. Chưa dò `beta_div`/`beta_adv`, chưa chạy trên CICIoV thật.
 
 ## Khác gì so với bài báo
+
+### 1. Eq. (12) không sinh ra nhiễu Gauss
+
+Bài viết `z = (1/√(2π))·exp(−u²/2)` và gọi đó là *"standard Gaussian noise
+sampling"*. Nhưng đó là **hàm mật độ** Gauss, không phải phép lấy mẫu. Với
+`u ∈ (0,1)` từ ánh xạ logistic, kết quả **luôn nằm trong [0.2420, 0.3989]** —
+không có trung bình 0, không có phương sai 1, không bao giờ âm. Đo được đúng
+khoảng đó.
+
+Đặt vào Eq. (10) thì `y* = (1−z, z)` với `z ∈ [0.24, 0.40]`, tức là **nhãn mềm
+kiểu label smoothing**. Xét như vậy thì hợp lý — chỉ là tên gọi sai. Mặc định
+chạy đúng chữ; `--noise_mode boxmuller` cho Gauss thật để đối chứng.
+
+### 2. Algorithm 1 không có FedAvg
+
+Không dòng nào trong Algorithm 1 trung bình tham số. Global model được tạo
+**hoàn toàn** bằng chưng cất từ pseudo-data. Đầu ra của thuật toán cũng là các
+model **local**, không phải global. Nên mặc định ở đây bỏ hẳn bước FedAvg —
+`--fedavg_init` bật lại để đối chứng.
+
+**Rủi ro cần biết trước khi chạy thật:** vì global chỉ học từ pseudo-data, chất
+lượng của nó phụ thuộc hoàn toàn vào generator. Trên dữ liệu giả 8 client / 6
+round, cả hai cấu hình đều mắc ở mức lớp đa số (acc 0.335 vs 0.336) — tức thí
+nghiệm đồ chơi **không phân biệt được**. Cần `--kd_steps` đủ lớn và dữ liệu thật
+mới kết luận được.
+
+### 3. Eq. (20) chỉ có hai số hạng
+
+Bản trước trừ thêm `β_adv · KL(global ‖ ensemble)` — đó là loss của họ
+DFAD/DENSE, **không có trong bài này**. Đã bỏ, `--beta_adv` mặc định 0.
+
+### 4. Generator: đầu vào là nhãn, không phải vector nhiễu
+
+Bài **không** đưa vector nhiễu `z` riêng vào generator. Nhiễu được gấp vào chính
+cái nhãn (Eq. 10), rồi `x̃ = G(y*)` (Eq. 13). Bản MLP cũ nhận `(z, y)` đã **bỏ
+hẳn** — giữ lại chỉ tạo ra một cờ chắc chắn sập.
+
+### 5. Bài là bài toán nhị phân
+
+Bảng 3 của bài: normal / abnormal. CICIoV có 13 lớp. Eq. (10) được mở rộng: lớp
+đúng giữ khối lượng `(1−z)`, phần `z` chia đều cho 12 lớp còn lại. Với 2 lớp thì
+trùng y nguyên Eq. (10).
+
+### 6. Trạng thái local phải ghi ra đĩa
+
+Trong chế độ simulation, đối tượng client bị **tạo lại mỗi round** nên model
+"cá nhân hoá" sẽ bị dựng lại từ đầu — cơ chế lõi của bài hỏng **âm thầm**.
+Trước đây `run_sim.py` chặn hẳn P3 vì lý do đó. Nay trạng thái lưu vào
+`<out_dir>/client_state/`, và server ghi metric `resumed_local` mỗi round để
+kiểm chứng: **từ round 2 phải bằng số client**, nếu bằng 0 là cơ chế đã hỏng.
+
+Đo được: có `--state-dir` → `[0, 1, 1]`; không có → `[0, 0, 0]`.
+
+---
+
+## Ghi chú cũ
 
 "Nhiễu Gauss từ hệ hỗn loạn" cài bằng ánh xạ logistic (r=3.99) + Box–Muller; bài không nói rõ dùng hệ hỗn loạn nào. Cấu trúc generator, learning rate, số bước chưng cất là **suy đoán** — bài chỉ mô tả bằng lời và công thức loss.
 

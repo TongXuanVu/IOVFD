@@ -55,19 +55,20 @@ IS_P2 = os.path.exists(os.path.join(ROOT, "model_kanconv.py"))  # FedIoV
 IS_P3 = os.path.exists(os.path.join(ROOT, "generator.py"))      # IoVFD
 logger = logging.getLogger(__name__)
 
-if IS_P3:
-    sys.exit(
-        "run_sim.py KHONG dung duoc cho IoVFD (P3).\n\n"
-        "Trong che do simulation cua Flower, doi tuong client bi TAO MOI moi\n"
-        "round — trang thai cuc bo khong song sot (da do bang thuc nghiem).\n"
-        "Client cua P3 giu model local CA NHAN HOA qua cac round, va chi nap\n"
-        "global khi rnd <= 1; neu chay simulation thi tu round 2 tro di no se\n"
-        "train tren model khoi tao ngau nhien -> hong dung co che loi cua bai,\n"
-        "ma hong AM THAM.\n\n"
-        "Dung run_fl.py cho P3 (moi client mot tien trinh nen model local ben\n"
-        "vung), hoac sua client de luu/nap trang thai ra dia theo client id.")
+# P3 (IoVFD) TRUOC DAY BI CHAN o day: doi tuong client bi Ray tao lai moi
+# round nen model local ca nhan hoa khong song sot. Nay client da luu trang
+# thai ra dia (--state-dir) nen chay simulation duoc. Kiem chung bang metric
+# `resumed_local` server ghi ra moi round: tu round 2 phai bang so client.
 
-if IS_P2:
+if IS_P3:
+    from client_iov import IoVFDClient as ClientCls            # noqa: E402
+    from model_cnn1d import (CNN1D_IDS, INPUT_LEN,             # noqa: E402
+                             NUM_GLOBAL_CLASSES)
+    from generator import ChaoticNoise                          # noqa: E402
+
+    def build_model(arch, num_classes, dropout, hidden=64, layers=2, **kw):
+        return CNN1D_IDS(INPUT_LEN, num_classes, dropout)
+elif IS_P2:
     from client_iov import FedIoVClient as ClientCls           # noqa: E402
     from model_kanconv import KANConvNet, NUM_GLOBAL_CLASSES, INPUT_LEN  # noqa: E402
 
@@ -88,7 +89,7 @@ else:
 
 
 def clients_with_data(data_dir, client_ids, task):
-    fed = os.path.join(data_dir, "federated_data")
+    fed = os.path.join(data_dir, C.FED_SUBDIR)
     ok = []
     for cid in client_ids:
         if task is None:
@@ -124,20 +125,29 @@ def make_client_fn(ids, args, task, device):
     def client_fn(ctx):
         pid = int(ctx.node_config.get("partition-id", 0))
         cid = ids[pid % len(ids)]
-        if IS_P2:
+        # Ray chi cho actor thay GPU khi num_gpus > 0; neu khong thay phai CPU.
+        dev = device if torch.cuda.is_available() else "cpu"
+        if IS_P3:
+            c = ClientCls(cid, args.data_dir, dev, args.max_samples,
+                          args.batch_size, task, args.lr, args.dropout,
+                          args.lambda_kd, args.temperature,
+                          personalized=not args.no_personalized,
+                          state_dir=args.state_dir,
+                          pretrain_epochs=args.pretrain_epochs)
+        elif IS_P2:
             atk = args.attackers.get(cid, "none")
-            c = ClientCls(cid, args.data_dir, device, args.max_samples,
+            c = ClientCls(cid, args.data_dir, dev, args.max_samples,
                           args.batch_size, task, args.lr, args.dropout,
                           tuple(args.width), args.grid_size, args.spline_order,
                           atk, args.attack_scale, args.seed)
         elif IS_P4:
-            c = ClientCls(cid, args.data_dir, device, args.max_samples,
+            c = ClientCls(cid, args.data_dir, dev, args.max_samples,
                           args.batch_size, task, args.lr, args.dropout,
                           args.arch, args.hidden, args.layers,
                           args.throughput, args.latency, args.node_trust,
                           args.simulate_sdn, args.jitter, args.seed)
         else:
-            c = ClientCls(cid, args.data_dir, device, args.max_samples,
+            c = ClientCls(cid, args.data_dir, dev, args.max_samples,
                           args.batch_size, task, args.lr, args.dropout)
         return c.to_client()
     return client_fn
@@ -165,8 +175,35 @@ def main():
     p.add_argument("--actor-cpus", type=float, default=1.0,
                    help="CPU cho MOI client song song. Tang len de giam so client "
                         "chay dong thoi neu thieu RAM")
-    p.add_argument("--actor-gpus", type=float, default=0.0,
-                   help="Ty le GPU moi client, vd 0.1 = toi da 10 client/GPU")
+    p.add_argument("--actor-gpus", type=float, default=-1.0,
+                   help="Ty le GPU moi client. -1 = tu tinh. 0 = ep CPU")
+    p.add_argument("--fed-subdir", type=str, default="federated_data")
+    # --- rieng P3 (IoVFD) ---
+    p.add_argument("--lambda-kd", type=float, default=0.2,
+                   help="lambda_2 cua Eq.(29) o client")
+    p.add_argument("--lambda1", type=float, default=0.2,
+                   help="lambda_1 cua Eq.(26) o global")
+    p.add_argument("--temperature", type=float, default=3.0)
+    p.add_argument("--no-personalized", action="store_true")
+    p.add_argument("--pretrain-epochs", type=int, default=1)
+    p.add_argument("--kd-steps", type=int, default=30)
+    p.add_argument("--gen-steps", type=int, default=1)
+    p.add_argument("--stu-steps", type=int, default=5)
+    p.add_argument("--kd-batch", type=int, default=128)
+    p.add_argument("--noise-dim", type=int, default=100)
+    p.add_argument("--lr-g", type=float, default=1e-4)
+    p.add_argument("--lr-s", type=float, default=1e-4)
+    p.add_argument("--beta-div", type=float, default=1.0)
+    p.add_argument("--beta-adv", type=float, default=0.0)
+    p.add_argument("--chaos-r", type=float, default=4.0)
+    p.add_argument("--chaos-u0", type=float, default=0.01)
+    p.add_argument("--noise-mode", choices=["paper", "boxmuller"], default="paper")
+    p.add_argument("--gen-seq-len", type=int, default=8)
+    p.add_argument("--gen-channels", type=int, default=32)
+    p.add_argument("--gen-heads", type=int, default=4)
+    p.add_argument("--gen-blocks", type=int, default=3)
+    p.add_argument("--fedavg-init", action="store_true")
+    p.add_argument("--weighted-ensemble", action="store_true")
     # --- rieng P2 (FedIoV) ---
     p.add_argument("--width", type=int, nargs=2, default=[16, 32])
     p.add_argument("--grid-size", type=int, default=5)
@@ -196,7 +233,21 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
 
+    C.set_fed_subdir(args.fed_subdir)
+    if args.actor_gpus < 0:                 # tu chia GPU cho so actor song song
+        n_gpu = torch.cuda.device_count()
+        args.actor_gpus = (round(n_gpu / max(1, int(os.cpu_count() /
+                           max(args.actor_cpus, 1e-9))), 4) if n_gpu > 0 else 0.0)
+    logger.info(f"GPU cho moi actor: {args.actor_gpus} "
+                f"({torch.cuda.device_count()} GPU / {os.cpu_count()} CPU)")
+
     os.makedirs(args.out_dir, exist_ok=True)
+    # Trang thai model local cho P3 — Ray tao lai client moi round.
+    args.state_dir = os.path.join(args.out_dir, "client_state")
+    if IS_P3 and args.restart and os.path.isdir(args.state_dir):
+        import shutil
+        shutil.rmtree(args.state_dir)
+        logger.info("--restart: da xoa model cuc bo cua client")
     sfx_arch = f"_{args.arch}" if IS_P4 else ""
     C.setup_logging(os.path.join(args.out_dir, f"sim{sfx_arch}.log"))
     torch.manual_seed(args.seed)
@@ -265,9 +316,27 @@ def main():
             min_fit_clients=max(1, int(len(ids) * args.fraction_fit)),
             min_evaluate_clients=0, min_available_clients=len(ids),
             initial_parameters=ndarrays_to_parameters(C.get_model_parameters(model)),
-            on_fit_config_fn=S.fit_config_fn(args.local_epochs, args.lr),
+            on_fit_config_fn=(
+                S.fit_config_fn(args.local_epochs, args.lr, args.lambda_kd)
+                if IS_P3 else S.fit_config_fn(args.local_epochs, args.lr)),
         )
-        if IS_P2:
+        if IS_P3:
+            ev = S.make_evaluate_fn(model, loader, nn.CrossEntropyLoss(), device,
+                                    csv_file, args.out_dir, class_names, remaining,
+                                    start_round, task, args.cm_every)
+            strategy = S.IoVFDStrategy(
+                generator=S.build_generator(args, device),
+                noise=ChaoticNoise(NUM_GLOBAL_CLASSES, r=args.chaos_r,
+                                   u0=args.chaos_u0, device=str(device),
+                                   mode=args.noise_mode),
+                device=device, kd_steps=args.kd_steps, gen_steps=args.gen_steps,
+                stu_steps=args.stu_steps, kd_batch=args.kd_batch,
+                lr_g=args.lr_g, lr_s=args.lr_s, temperature=args.temperature,
+                beta_div=args.beta_div, beta_adv=args.beta_adv,
+                lambda1=args.lambda1, fedavg_init=args.fedavg_init,
+                weighted_ensemble=args.weighted_ensemble,
+                evaluate_fn=ev, **common_kw)
+        elif IS_P2:
             ev = S.make_evaluate_fn(model, loader, nn.CrossEntropyLoss(), device,
                                     csv_file, args.out_dir, class_names, remaining,
                                     start_round, task, args.cm_every)

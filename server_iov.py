@@ -4,17 +4,20 @@ Bai bao: Cao, Di, Jin, FGCS 183 (2026).
 
 Moi round, sau khi nhan trong so tu cac client, server lam 3 viec:
 
-  1. FedAvg de co diem khoi tao cho global.
-  2. Huan luyen GENERATOR doi khang (khong dung du lieu that):
-        L_G = CE(ensemble(G(z,y)), y)                       # one-hot
-            + beta_div * L_diversity(G(z,y), z)             # da dang
-            - beta_adv * KL(global || ensemble)             # doi khang
-     Generator co gang sinh mau ma ensemble tu tin NHUNG global lai sai ->
-     dung la vung kien thuc global con thieu.
-  3. CHUNG CAT ensemble -> global tren chinh nhung mau do:
-        L_S = KL(global(x) || ensemble(x))
+  1. Lay nhan theo TAN SUAT NHAN cua client (Eq. 9), gap nhieu hon loan vao
+     nhan (Eq. 10-12) de duoc nhan mem y*.
+  2. Huan luyen GENERATOR (Eq. 20):
+        L_G = KL(sigma(Output_LM), y*)        # Eq. 18, khop nhan MEM
+            + L_dis                            # Eq. 19, da dang theo nhan
+  3. CHUNG CAT ensemble -> global (Eq. 26):
+        L_GM = CE(ST(1)GM, y) + lambda_1 * KL(ST(t)GM, ST(t)LM)
+     tuc co CA so hang hoc nhan that, khong chi mot minh KL.
 
-Nhieu z lay tu he hon loan (ChaoticNoise), khong phai torch.randn.
+KHONG co FedAvg: Algorithm 1 cua bai khong he trung binh tham so — global
+duoc tao HOAN TOAN bang chung cat. Bat lai bang --fedavg-init de doi chung.
+
+KHONG co so hang doi khang: Eq. 20 chi co hai so hang. --beta-adv (mac dinh
+0) la phan them cua ho DFAD/DENSE, khong phai cua bai nay.
 
 Chay:
   python server_iov.py --rounds 30 --num-clients 10
@@ -43,13 +46,15 @@ if os.path.isdir(_P1) and _P1 not in sys.path:   # repo doc lap: khong co thu mu
 
 import common as C                               # noqa: E402
 from model_cnn1d import CNN1D_IDS, INPUT_LEN, NUM_GLOBAL_CLASSES  # noqa: E402
-from generator import (ChaoticNoise, Generator, diversity_loss,  # noqa: E402
-                       ensemble_logits, kl_divergence, onehot_loss)
+from generator import (ChaoticNoise, Generator,                 # noqa: E402
+                       diversity_loss, ensemble_logits, kl_divergence,
+                       kl_to_soft_label, noisy_onehot, sample_labels,
+                       student_ce)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_DATA_DIR = r"C:\FederatedLearning\AFSIC-IOV\data\100client"
-DEFAULT_OUT_DIR = r"C:\FederatedLearning\Rebuild-IOV\P3-IOVFD\out"
+DEFAULT_OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")
 
 
 class IoVFDStrategy(fl.server.strategy.FedAvg):
@@ -57,9 +62,12 @@ class IoVFDStrategy(fl.server.strategy.FedAvg):
 
     def __init__(self, model, generator, noise, device, ckpt_dir: str,
                  start_round: int = 0, kd_steps: int = 30, gen_steps: int = 1,
-                 stu_steps: int = 5, kd_batch: int = 128, lr_g: float = 1e-3,
-                 lr_s: float = 1e-3, temperature: float = 3.0,
-                 beta_div: float = 1.0, beta_adv: float = 1.0, **kwargs):
+                 stu_steps: int = 5, kd_batch: int = 128, lr_g: float = 1e-4,
+                 lr_s: float = 1e-4, temperature: float = 3.0,
+                 beta_div: float = 1.0, beta_adv: float = 0.0,
+                 lambda1: float = 0.2, fedavg_init: bool = False,
+                 weighted_ensemble: bool = False,
+                 n_classes: int = NUM_GLOBAL_CLASSES, **kwargs):
         super().__init__(**kwargs)
         self.model = model
         self.generator = generator
@@ -74,6 +82,11 @@ class IoVFDStrategy(fl.server.strategy.FedAvg):
         self.T = temperature
         self.beta_div = beta_div
         self.beta_adv = beta_adv
+        self.weighted_ensemble = weighted_ensemble
+        self.lambda1 = lambda1              # Eq. (26), bai dat 0.2
+        self.fedavg_init = fedavg_init
+        self.n_classes = n_classes
+        self.label_dist = None              # Eq. (9), gop tu label_counts client
         self.opt_g = optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999))
         self.lr_s = lr_s
         self._template = copy.deepcopy(model).cpu()
@@ -90,51 +103,65 @@ class IoVFDStrategy(fl.server.strategy.FedAvg):
             models.append(m)
         return models
 
+    def _lay_mau(self, b, dev):
+        """Eq. (9) -> y ; Eq. (11,12) -> z ; Eq. (10) -> y*."""
+        y = sample_labels(b, self.label_dist, dev)
+        z = self.noise.gaussian(b).to(dev)
+        return y, noisy_onehot(y, z, self.n_classes)
+
     def _distill(self, teachers, weights, rnd) -> Dict[str, float]:
         student = self.model.to(self.device)
         opt_s = optim.Adam(student.parameters(), lr=self.lr_s)
         g, dev, b = self.generator.to(self.device), self.device, self.kd_batch
-        stats = {"gen_loss": 0.0, "stu_loss": 0.0, "n": 0}
+        # Eq. (17)/(23) lay trung binh KHONG trong so 1/n. weights chi dung
+        # khi nguoi dung co tinh bat --weighted-ensemble.
+        w = weights if self.weighted_ensemble else None
+        stats = {"gen_loss": 0.0, "stu_loss": 0.0, "stu_ce": 0.0, "n": 0}
 
         for _ in range(self.kd_steps):
-            # --- (a) buoc generator: tim vung global con yeu -----------------
+            # --- (a) buoc generator: Eq. (20) L_G = L_kl_same + L_dis -------
             student.eval()
             g.train()
             for _ in range(self.gen_steps):
-                z = self.noise.gaussian(b).to(dev)
-                y = torch.randint(0, NUM_GLOBAL_CLASSES, (b,), device=dev)
-                x = g(z, y)
-                t_out = ensemble_logits(teachers, x, weights)
-                s_out = student(x)
-                loss_g = (onehot_loss(t_out, y)
-                          + self.beta_div * diversity_loss(x, z)
-                          - self.beta_adv * kl_divergence(s_out, t_out, self.T))
+                y, y_star = self._lay_mau(b, dev)
+                x = g(y_star)
+                t_out = ensemble_logits(teachers, x, w)
+                loss_g = (kl_to_soft_label(t_out, y_star)          # Eq. (18)
+                          + self.beta_div * diversity_loss(x, y_star))  # Eq. (19)
+                if self.beta_adv:      # KHONG co trong bai, mac dinh tat
+                    loss_g = loss_g - self.beta_adv * kl_divergence(
+                        student(x), t_out, self.T)
                 self.opt_g.zero_grad()
                 loss_g.backward()
                 self.opt_g.step()
                 stats["gen_loss"] += loss_g.item()
 
-            # --- (b) buoc student: global hoc lai tu ensemble ---------------
+            # --- (b) buoc global: Eq. (26) L_GM = L_student + l1 * L_kd -----
             g.eval()
             student.train()
             for _ in range(self.stu_steps):
                 with torch.no_grad():
-                    z = self.noise.gaussian(b).to(dev)
-                    y = torch.randint(0, NUM_GLOBAL_CLASSES, (b,), device=dev)
-                    x = g(z, y).detach()
-                    t_out = ensemble_logits(teachers, x, weights).detach()
-                loss_s = kl_divergence(student(x), t_out, self.T)
+                    y, y_star = self._lay_mau(b, dev)
+                    x = g(y_star).detach()
+                    t_out = ensemble_logits(teachers, x, w).detach()
+                s_out = student(x)
+                ce = student_ce(s_out, y)                          # Eq. (24)
+                kd = kl_divergence(s_out, t_out, self.T)           # Eq. (25)
+                loss_s = ce + self.lambda1 * kd                    # Eq. (26)
                 opt_s.zero_grad()
                 loss_s.backward()
                 opt_s.step()
                 stats["stu_loss"] += loss_s.item()
+                stats["stu_ce"] += ce.item()
             stats["n"] += 1
 
         n = max(stats["n"], 1)
         out = {"gen_loss": stats["gen_loss"] / (n * max(self.gen_steps, 1)),
-               "stu_loss": stats["stu_loss"] / (n * max(self.stu_steps, 1))}
+               "stu_loss": stats["stu_loss"] / (n * max(self.stu_steps, 1)),
+               "stu_ce": stats["stu_ce"] / (n * max(self.stu_steps, 1))}
         logger.info(f"[Round {rnd}] data-free KD {self.kd_steps} vong: "
-                    f"gen_loss={out['gen_loss']:.4f} stu_loss={out['stu_loss']:.4f}")
+                    f"gen_loss={out['gen_loss']:.4f} "
+                    f"stu_loss={out['stu_loss']:.4f} (CE {out['stu_ce']:.4f})")
         return out
 
     # ---- Flower API -------------------------------------------------------
@@ -156,10 +183,41 @@ class IoVFDStrategy(fl.server.strategy.FedAvg):
         metrics["kd_loss_client"] = float(np.mean(
             [r.metrics.get("kd_loss", 0.0) for _, r in results]))
         metrics["num_clients"] = len(results)
+        # Kiem chung co che ca nhan hoa: log cua client khong ra khoi Ray actor,
+        # nen so client thuc su TIEP TUC model cuc bo phai duoc bao qua metrics.
+        # Tu round 2 tro di con so nay phai bang num_clients; neu bang 0 nghia
+        # la trang thai cuc bo khong song sot va co che loi cua bai da hong.
+        tiep = sum(int(r.metrics.get("resumed_local", 0)) for _, r in results)
+        metrics["resumed_local"] = tiep
+        if server_round > 1 and tiep < len(results):
+            logger.warning(f"[Round {server_round}] CANH BAO: chi {tiep}/"
+                           f"{len(results)} client tiep duoc model cuc bo — "
+                           f"co che ca nhan hoa cua bai dang hong")
+        elif tiep:
+            logger.info(f"[Round {server_round}] {tiep}/{len(results)} client "
+                        f"tiep tuc model cuc bo (Algorithm 1 dong 10)")
 
-        # global = FedAvg cua cac model local
-        self.model.load_state_dict(
-            C.ndarrays_to_state_dict(self.model, parameters_to_ndarrays(params)))
+        # Eq. (9): p(y) tu TAN SUAT NHAN cua du lieu client. Client da gui san
+        # label_counts; truoc day server nhan roi vut di, generator van lay
+        # nhan bang randint DEU -> sai phan bo, va sai han voi bo CICIoV lech
+        # lop nang.
+        tong = np.zeros(self.n_classes, dtype=np.float64)
+        for _, r in results:
+            lc = r.metrics.get("label_counts")
+            if lc:
+                v = np.fromstring(lc, sep=",")
+                tong[:len(v)] += v[:self.n_classes]
+        if tong.sum() > 0:
+            self.label_dist = tong / tong.sum()
+            if server_round == 1:
+                logger.info("Eq.9 p(y) tu client: "
+                            + " ".join(f"{v:.3f}" for v in self.label_dist))
+
+        # Algorithm 1 KHONG co buoc trung binh tham so: global chi duoc tao
+        # bang chung cat. --fedavg-init bat lai de doi chung.
+        if self.fedavg_init:
+            self.model.load_state_dict(
+                C.ndarrays_to_state_dict(self.model, parameters_to_ndarrays(params)))
 
         if self.kd_steps > 0 and len(results) >= 2:
             teachers = self._build_ensemble(
@@ -198,6 +256,18 @@ def make_evaluate_fn(model, loader, criterion, device, csv_file, out_dir,
     return evaluate_fn
 
 
+def build_generator(args, device):
+    """Eq. (13)-(16) cua bai.
+
+    Ban MLP cu (z 100 chieu + Embedding(y) -> MLP) DA BO HAN: duong ong cua
+    bai chi sinh ra nhan mem y*, khong co vector nhieu rieng de dua vao no.
+    Giu lai chi tao ra mot co --gen-arch mlp chac chan sap khi ai do bat
+    (da do: TypeError, MLPGenerator.forward() thieu doi so 'y').
+    """
+    return Generator(NUM_GLOBAL_CLASSES, INPUT_LEN, args.gen_seq_len,
+                     args.gen_channels, args.gen_heads, args.gen_blocks).to(device)
+
+
 def fit_config_fn(local_epochs, lr, lambda_kd):
     def fn(server_round: int) -> Dict[str, Scalar]:
         return {"server_round": server_round, "local_epochs": local_epochs,
@@ -229,8 +299,18 @@ def main():
     p.add_argument("--num-clients", type=int, default=10)
     p.add_argument("--fraction-fit", type=float, default=1.0)
     p.add_argument("--local-epochs", type=int, default=1)
-    p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--lambda-kd", type=float, default=1.0)
+    p.add_argument("--lr", type=float, default=1e-4,
+                   help="Bai dat 0.0001")
+    p.add_argument("--lambda-kd", type=float, default=0.2,
+                   help="lambda_2 cua Eq.(29) o client. Bai dat 0.2")
+    p.add_argument("--lambda1", type=float, default=0.2,
+                   help="lambda_1 cua Eq.(26) o global. Bai dat 0.2")
+    p.add_argument("--fedavg-init", action="store_true",
+                   help="Trung binh tham so truoc khi chung cat. Algorithm 1 "
+                        "cua bai KHONG lam vay — chi de doi chung")
+    p.add_argument("--weighted-ensemble", action="store_true",
+                   help="Trung binh ensemble theo so mau. Eq.(17) la 1/n "
+                        "KHONG trong so — chi de doi chung")
     p.add_argument("--dropout", type=float, default=0.15)
     # --- data-free KD ---
     p.add_argument("--kd-steps", type=int, default=30, help="0 = tat KD (FedAvg)")
@@ -238,12 +318,24 @@ def main():
     p.add_argument("--stu-steps", type=int, default=5)
     p.add_argument("--kd-batch", type=int, default=128)
     p.add_argument("--noise-dim", type=int, default=100)
-    p.add_argument("--lr-g", type=float, default=1e-3)
-    p.add_argument("--lr-s", type=float, default=1e-3)
+    p.add_argument("--lr-g", type=float, default=1e-4)
+    p.add_argument("--lr-s", type=float, default=1e-4)
     p.add_argument("--temperature", type=float, default=3.0)
     p.add_argument("--beta-div", type=float, default=1.0)
-    p.add_argument("--beta-adv", type=float, default=1.0)
-    p.add_argument("--chaos-r", type=float, default=3.99,
+    p.add_argument("--beta-adv", type=float, default=0.0,
+                   help="So hang doi khang. Eq.(20) chi co HAI so hang, khong "
+                        "co cai nay — mac dinh tat")
+    p.add_argument("--gen-seq-len", type=int, default=8)
+    p.add_argument("--gen-channels", type=int, default=32)
+    p.add_argument("--gen-heads", type=int, default=4)
+    p.add_argument("--gen-blocks", type=int, default=3,
+                   help="Bai noi 'three stacked ... blocks'")
+    p.add_argument("--noise-mode", choices=["paper", "boxmuller"], default="paper",
+                   help="paper = Eq.(12) nguyen van (z in [0.242, 0.399], "
+                        "KHONG phai Gauss chuan). boxmuller = Gauss that")
+    p.add_argument("--chaos-u0", type=float, default=0.01,
+                   help="Gia tri khoi tao he logistic. Bai dat 0.01")
+    p.add_argument("--chaos-r", type=float, default=4.0,
                    help="Tham so anh xa logistic (>3.57 la hon loan)")
     # --- chung ---
     p.add_argument("--data-dir", type=str, default=DEFAULT_DATA_DIR)
@@ -267,8 +359,9 @@ def main():
                 f"kd_steps={args.kd_steps} | task: {args.task}")
 
     model = CNN1D_IDS(INPUT_LEN, NUM_GLOBAL_CLASSES, args.dropout).to(device)
-    generator = Generator(args.noise_dim, NUM_GLOBAL_CLASSES, INPUT_LEN).to(device)
-    noise = ChaoticNoise(args.noise_dim, r=args.chaos_r, device=str(device))
+    generator = build_generator(args, device)
+    noise = ChaoticNoise(NUM_GLOBAL_CLASSES, r=args.chaos_r, u0=args.chaos_u0,
+                         device=str(device), mode=args.noise_mode)
 
     if args.mode == "test":
         run_test(args, model, device)
@@ -298,6 +391,8 @@ def main():
         kd_steps=args.kd_steps, gen_steps=args.gen_steps, stu_steps=args.stu_steps,
         kd_batch=args.kd_batch, lr_g=args.lr_g, lr_s=args.lr_s,
         temperature=args.temperature, beta_div=args.beta_div, beta_adv=args.beta_adv,
+        lambda1=args.lambda1, fedavg_init=args.fedavg_init,
+        weighted_ensemble=args.weighted_ensemble,
         fraction_fit=args.fraction_fit,
         fraction_evaluate=0.0,
         min_fit_clients=max(2, int(args.num_clients * args.fraction_fit)),
