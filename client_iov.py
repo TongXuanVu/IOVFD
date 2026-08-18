@@ -63,6 +63,7 @@ class IoVFDClient(fl.client.NumPyClient):
         self.pretrain_epochs = pretrain_epochs
         self.task = task
         self.da_nap_cuc_bo = False
+        self.da_tung_fit = False        # doi tuong nay da fit lan nao chua
 
         x, y = C.load_client_data(data_dir, client_id, task, max_samples)
         self.loader = C.make_loader(x, y, batch_size, shuffle=True)
@@ -149,8 +150,21 @@ class IoVFDClient(fl.client.NumPyClient):
             self.da_nap_cuc_bo = False
             if self.pretrain_epochs > 0 and self.personalized:
                 self._pretrain()
-        else:
+        elif self.da_tung_fit:
             self.da_nap_cuc_bo = True          # tiep model dang co trong bo nho
+        else:
+            # Doi tuong VUA duoc tao (che do simulation) o round > 1 ma khong co
+            # trang thai tren dia: model dang la KHOI TAO NGAU NHIEN. Truoc day
+            # nhanh nay im lang giu no lai -> train tiep tren rac ma khong ai
+            # biet. Nay quay ve global va bao to.
+            logger.warning(
+                f"[Client {self.cid}][Round {rnd}] KHONG co model cuc bo tren dia "
+                f"va doi tuong vua duoc tao -> khoi tao lai tu GLOBAL. Neu dang "
+                f"resume thi ban da mat client_state/, co che ca nhan hoa cua bai "
+                f"bi dut o round nay.")
+            self.model.load_state_dict(
+                C.ndarrays_to_state_dict(self.model, parameters))
+            self.da_nap_cuc_bo = False
 
         self.model.train()
         opt = optim.Adam(self.model.parameters(), lr=lr)
@@ -171,6 +185,7 @@ class IoVFDClient(fl.client.NumPyClient):
                 n_batches += 1
 
         nb = max(n_batches, 1)
+        self.da_tung_fit = True
         self._save_local()
         logger.info(f"[Client {self.cid}][Round {rnd}] n={self.n_samples} "
                     f"ce={sum_ce / nb:.4f} kd={sum_kd / nb:.4f} (lambda={lam})"
