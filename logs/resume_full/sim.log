@@ -1,0 +1,102 @@
+2026-08-18 04:01:23,416 - INFO - Thiet bi: cuda | pool 100 client | 30 round/task | Flower simulation (Ray)
+2026-08-18 04:01:23,416 - INFO - Client co du lieu tung task: task0=50, task1=60, task2=70, task3=80, task4=100
+2026-08-18 04:01:23,718 - INFO - Nap global test: /kaggle/input/datasets/tongxuanvu/100clientiov/global_test_data.pt
+2026-08-18 04:01:37,892 - INFO - Global test goc: n=42048683
+2026-08-18 04:01:39,573 - INFO - Task 0: loc ve lop 0-2 -> n=41858134
+2026-08-18 04:01:39,573 - INFO - Danh gia moi round tren n=41858134 mau (dtype=float16)
+2026-08-18 04:01:44,755 - INFO - ===== Task 0: 50 client, 30 round =====
+2026-08-18 04:01:46,961 - INFO - setup plugin alembic.autogenerate.schemas
+2026-08-18 04:01:46,961 - INFO - setup plugin alembic.autogenerate.tables
+2026-08-18 04:01:46,961 - INFO - setup plugin alembic.autogenerate.types
+2026-08-18 04:01:46,961 - INFO - setup plugin alembic.autogenerate.constraints
+2026-08-18 04:01:46,961 - INFO - setup plugin alembic.autogenerate.defaults
+2026-08-18 04:01:46,961 - INFO - setup plugin alembic.autogenerate.comments
+2026-08-18 04:02:02,969 - WARNING - DEPRECATED FEATURE: flwr.simulation.start_simulation() is deprecated.
+	Instead, use the `flwr run` CLI command to start a local simulation in your Flower app, as shown for example below:
+
+		$ flwr new  # Create a new Flower app from a template
+
+		$ flwr run  # Run the Flower app in Simulation Mode
+
+	Using `start_simulation()` is deprecated.
+
+            This is a deprecated feature. It will be removed
+            entirely in future versions of Flower.
+        
+2026-08-18 04:02:02,970 - INFO - Starting Flower simulation, config: num_rounds=30, no round_timeout
+2026-08-18 04:02:12,425 - INFO - Flower VCE: Ray initialized with resources: {'node:172.19.2.2': 1.0, 'node:__internal_head__': 1.0, 'CPU': 4.0, 'object_store_memory': 8412987801.0, 'GPU': 2.0, 'memory': 19630304871.0, 'accelerator_type:T4': 1.0}
+2026-08-18 04:02:12,425 - INFO - Optimize your simulation with Flower VCE: https://flower.ai/docs/framework/how-to-run-simulations.html
+2026-08-18 04:02:12,425 - INFO - Flower VCE: Resources for each Virtual Client: {'num_cpus': 1.0, 'num_gpus': 0.5}
+2026-08-18 04:02:12,458 - INFO - Flower VCE: Creating VirtualClientEngineActorPool with 4 actors
+2026-08-18 04:02:12,458 - INFO - [INIT]
+2026-08-18 04:02:12,459 - INFO - Using initial global parameters provided by strategy
+2026-08-18 04:02:12,459 - INFO - Starting evaluation of initial global parameters
+2026-08-18 04:02:12,462 - INFO - Evaluation returned no results (`None`)
+2026-08-18 04:02:12,462 - INFO - 
+2026-08-18 04:02:12,462 - INFO - [ROUND 1]
+2026-08-18 04:02:12,464 - INFO - configure_fit: strategy sampled 50 clients (out of 50)
+2026-08-18 07:07:38,272 - INFO - aggregate_fit: received 50 results and 0 failures
+2026-08-18 07:07:38,354 - WARNING - No fit_metrics_aggregation_fn provided
+2026-08-18 07:07:38,354 - INFO - Eq.9 p(y) tu client: 0.996 0.003 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000 0.000
+2026-08-18 07:07:52,447 - INFO - [Round 1] data-free KD 30 vong: gen_loss=1.4144 stu_loss=1.6602 (CE 1.6413)
+2026-08-18 07:07:52,483 - INFO - [Round 1] luu checkpoint -> out_full/checkpoints/round_001.pth
+2026-08-18 07:15:32,636 - INFO - [Round 1] loss=0.4001 acc=0.9962 | micro P/R/F1=0.9962/0.9962/0.9962 | macro P/R/F1=0.3321/0.3333/0.3327 | weighted P/R/F1=0.9925/0.9962/0.9944
+2026-08-18 07:15:32,638 - INFO - fit progress: (1, 0.40010779619858455, {'accuracy': 0.9962362870738576, 'micro_precision': 0.9962362870738576, 'micro_recall': 0.9962362870738576, 'micro_f1': 0.9962362870738576, 'macro_precision': 0.33207876235795253, 'macro_recall': 0.3333333333333333, 'macro_f1': 0.33270486515874675, 'weighted_precision': 0.9924867396827056, 'weighted_recall': 0.9962362870738576, 'weighted_f1': 0.994357978671475}, 11600.175623694999)
+2026-08-18 07:15:32,638 - INFO - configure_evaluate: no clients selected, skipping evaluation
+2026-08-18 07:15:32,638 - INFO - 
+2026-08-18 07:15:32,638 - INFO - [ROUND 2]
+2026-08-18 07:15:32,638 - INFO - configure_fit: strategy sampled 50 clients (out of 50)
+2026-08-18 09:05:46,861 - INFO - aggregate_fit: received 50 results and 0 failures
+2026-08-18 09:05:46,942 - INFO - [Round 2] 50/50 client tiep tuc model cuc bo (Algorithm 1 dong 10)
+2026-08-18 09:06:00,050 - INFO - [Round 2] data-free KD 30 vong: gen_loss=0.7838 stu_loss=0.4981 (CE 0.4525)
+2026-08-18 09:06:00,086 - INFO - [Round 2] luu checkpoint -> out_full/checkpoints/round_002.pth
+2026-08-18 09:13:40,601 - INFO - [Round 2] loss=0.1720 acc=0.9962 | micro P/R/F1=0.9962/0.9962/0.9962 | macro P/R/F1=0.3321/0.3333/0.3327 | weighted P/R/F1=0.9925/0.9962/0.9944
+2026-08-18 09:13:40,602 - INFO - fit progress: (2, 0.17203282332175399, {'accuracy': 0.9962362870738576, 'micro_precision': 0.9962362870738576, 'micro_recall': 0.9962362870738576, 'micro_f1': 0.9962362870738576, 'macro_precision': 0.33207876235795253, 'macro_recall': 0.3333333333333333, 'macro_f1': 0.33270486515874675, 'weighted_precision': 0.9924867396827056, 'weighted_recall': 0.9962362870738576, 'weighted_f1': 0.994357978671475}, 18688.140090965)
+2026-08-18 09:13:40,602 - INFO - configure_evaluate: no clients selected, skipping evaluation
+2026-08-18 09:13:40,602 - INFO - 
+2026-08-18 09:13:40,603 - INFO - [ROUND 3]
+2026-08-18 09:13:40,603 - INFO - configure_fit: strategy sampled 50 clients (out of 50)
+2026-08-18 10:59:46,752 - INFO - aggregate_fit: received 50 results and 0 failures
+2026-08-18 10:59:46,831 - INFO - [Round 3] 50/50 client tiep tuc model cuc bo (Algorithm 1 dong 10)
+2026-08-18 10:59:59,837 - INFO - [Round 3] data-free KD 30 vong: gen_loss=0.7886 stu_loss=0.1830 (CE 0.0890)
+2026-08-18 10:59:59,873 - INFO - [Round 3] luu checkpoint -> out_full/checkpoints/round_003.pth
+2026-08-18 11:07:40,591 - INFO - [Round 3] loss=0.0537 acc=0.9962 | micro P/R/F1=0.9962/0.9962/0.9962 | macro P/R/F1=0.3321/0.3333/0.3327 | weighted P/R/F1=0.9925/0.9962/0.9944
+2026-08-18 11:07:40,593 - INFO - fit progress: (3, 0.05365527531062845, {'accuracy': 0.9962362870738576, 'micro_precision': 0.9962362870738576, 'micro_recall': 0.9962362870738576, 'micro_f1': 0.9962362870738576, 'macro_precision': 0.33207876235795253, 'macro_recall': 0.3333333333333333, 'macro_f1': 0.33270486515874675, 'weighted_precision': 0.9924867396827056, 'weighted_recall': 0.9962362870738576, 'weighted_f1': 0.994357978671475}, 25528.131179322)
+2026-08-18 11:07:40,593 - INFO - configure_evaluate: no clients selected, skipping evaluation
+2026-08-18 11:07:40,593 - INFO - 
+2026-08-18 11:07:40,594 - INFO - [ROUND 4]
+2026-08-18 11:07:40,594 - INFO - configure_fit: strategy sampled 50 clients (out of 50)
+2026-08-18 12:49:25,809 - INFO - aggregate_fit: received 50 results and 0 failures
+2026-08-18 12:49:25,893 - INFO - [Round 4] 50/50 client tiep tuc model cuc bo (Algorithm 1 dong 10)
+2026-08-18 12:49:39,259 - INFO - [Round 4] data-free KD 30 vong: gen_loss=1.0008 stu_loss=0.4563 (CE 0.0255)
+2026-08-18 12:49:39,302 - INFO - [Round 4] luu checkpoint -> out_full/checkpoints/round_004.pth
+2026-08-18 12:57:15,539 - INFO - [Round 4] loss=0.0407 acc=0.9962 | micro P/R/F1=0.9962/0.9962/0.9962 | macro P/R/F1=0.3321/0.3333/0.3327 | weighted P/R/F1=0.9925/0.9962/0.9944
+2026-08-18 12:57:15,540 - INFO - fit progress: (4, 0.040746447295059836, {'accuracy': 0.9962362870738576, 'micro_precision': 0.9962362870738576, 'micro_recall': 0.9962362870738576, 'micro_f1': 0.9962362870738576, 'macro_precision': 0.33207876235795253, 'macro_recall': 0.3333333333333333, 'macro_f1': 0.33270486515874675, 'weighted_precision': 0.9924867396827056, 'weighted_recall': 0.9962362870738576, 'weighted_f1': 0.994357978671475}, 32103.078570480004)
+2026-08-18 12:57:15,541 - INFO - configure_evaluate: no clients selected, skipping evaluation
+2026-08-18 12:57:15,541 - INFO - 
+2026-08-18 12:57:15,541 - INFO - [ROUND 5]
+2026-08-18 12:57:15,541 - INFO - configure_fit: strategy sampled 50 clients (out of 50)
+2026-08-18 14:42:14,289 - INFO - aggregate_fit: received 50 results and 0 failures
+2026-08-18 14:42:14,372 - INFO - [Round 5] 50/50 client tiep tuc model cuc bo (Algorithm 1 dong 10)
+2026-08-18 14:42:27,980 - INFO - [Round 5] data-free KD 30 vong: gen_loss=1.8217 stu_loss=0.2327 (CE 0.0316)
+2026-08-18 14:42:28,017 - INFO - [Round 5] luu checkpoint -> out_full/checkpoints/round_005.pth
+2026-08-18 14:50:21,689 - INFO - [Round 5] loss=0.0446 acc=0.9962 | micro P/R/F1=0.9962/0.9962/0.9962 | macro P/R/F1=0.3321/0.3333/0.3327 | weighted P/R/F1=0.9925/0.9962/0.9944
+2026-08-18 14:50:24,333 - INFO - Luu out_full/confusion_matrix_task0.csv
+2026-08-18 14:50:24,333 - INFO - Luu out_full/confusion_matrix_task0_normalized.csv
+2026-08-18 14:50:32,258 - INFO - Luu out_full/classification_report_task0.txt
+              precision    recall  f1-score   support
+
+      Benign     0.9962    1.0000    0.9981  41700592
+         DoS     0.0000    0.0000    0.0000    145129
+      double     0.0000    0.0000    0.0000     12413
+
+    accuracy                         0.9962  41858134
+   macro avg     0.3321    0.3333    0.3327  41858134
+weighted avg     0.9925    0.9962    0.9944  41858134
+
+2026-08-18 14:50:32,454 - INFO - Luu out_full/confusion_matrix_task0.png
+2026-08-18 14:50:32,455 - INFO - fit progress: (5, 0.04461262320877288, {'accuracy': 0.9962362870738576, 'micro_precision': 0.9962362870738576, 'micro_recall': 0.9962362870738576, 'micro_f1': 0.9962362870738576, 'macro_precision': 0.33207876235795253, 'macro_recall': 0.3333333333333333, 'macro_f1': 0.33270486515874675, 'weighted_precision': 0.9924867396827056, 'weighted_recall': 0.9962362870738576, 'weighted_f1': 0.994357978671475}, 38899.993303485)
+2026-08-18 14:50:32,455 - INFO - configure_evaluate: no clients selected, skipping evaluation
+2026-08-18 14:50:32,455 - INFO - 
+2026-08-18 14:50:32,456 - INFO - [ROUND 6]
+2026-08-18 14:50:32,456 - INFO - configure_fit: strategy sampled 50 clients (out of 50)
