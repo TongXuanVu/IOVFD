@@ -7,6 +7,10 @@ _thu/
 *.pth
 *.log
 
+# Trang thai resume qua GitHub (resume_state.py), moi kich ban mot thu muc
+!logs/resume*/
+!logs/resume*/**
+
 # du lieu (khong bao gio commit)
 *.pt
 data/

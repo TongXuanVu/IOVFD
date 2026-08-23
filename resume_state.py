@@ -33,7 +33,7 @@ import sys
 import tarfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-RESUME = os.path.join(HERE, "logs", "resume")
+RESUME = os.path.join(HERE, "logs", "resume")     # doi bang --resume-dir
 
 # (mau glob, co giu khong) — theo thu tu uu tien khi in
 MAU = [
@@ -218,6 +218,9 @@ def load(out_dir, force):
 def main():
     p = argparse.ArgumentParser(description="Dong goi/khoi phuc trang thai resume")
     p.add_argument("--out-dir", default=os.path.join(HERE, "out"))
+    p.add_argument("--resume-dir", default=None,
+                   help="Mac dinh logs/resume. Dat khac de tach nhieu kich ban "
+                        "chay song song, vd logs/resume_1percent")
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--save", action="store_true", help="out/ -> logs/resume/")
     g.add_argument("--load", action="store_true", help="logs/resume/ -> out/")
@@ -228,6 +231,10 @@ def main():
                    help="Khong dong goi client_state (commit nhe hon, nhung "
                         "resume se lam DUT co che ca nhan hoa cua P2/P3)")
     a = p.parse_args()
+    if a.resume_dir:
+        global RESUME
+        RESUME = (a.resume_dir if os.path.isabs(a.resume_dir)
+                  else os.path.join(HERE, a.resume_dir))
 
     if a.status:
         in_trang_thai("Trong repo (logs/resume)", RESUME)
