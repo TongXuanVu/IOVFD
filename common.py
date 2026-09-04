@@ -91,13 +91,15 @@ _LABEL_LUT = None       # np.ndarray: nhan goc -> nhan tuan tu, hoac None
 TASK_LABELS = None      # list[list[int]]: nhan GOC cua tung task (chi bo IoT)
 
 
-def _doc_task_mapping(data_dir):
+def _doc_task_mapping(data_dir, fed_subdir=None):
     """Doc task_mapping_label_ids.json: list[list[int]] nhan goc theo tung task.
 
     Bo IoV KHONG co file nay (nhan da tuan tu 0..12 san). Bo IoT co, va thu tu
     task phi tuan tu nen bat buoc phai remap.
     """
+    if fed_subdir is None: fed_subdir = FED_SUBDIR
     for p in (os.path.join(data_dir, "task_mapping_label_ids.json"),
+              os.path.join(data_dir, fed_subdir, "task_mapping_label_ids.json"),
               os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "task_mapping_label_ids.json")):
         if os.path.exists(p):
@@ -118,6 +120,9 @@ def _do_so_dac_trung(data_dir, fed_subdir):
             except Exception as e:
                 logger.warning(f"Khong doc duoc {p}: {e}")
     t = os.path.join(data_dir, "global_test_data.pt")
+    t2 = os.path.join(data_dir, fed_subdir, "global_test_data.pt")
+    if os.path.exists(t2):
+        t = t2
     if os.path.exists(t):
         x, _ = _read_pt(t)
         return int(x.shape[1]), t
@@ -146,11 +151,14 @@ def init_dataset(data_dir, fed_subdir=None):
 
     y_max = -1
     t = os.path.join(data_dir, "global_test_data.pt")
+    t2 = os.path.join(data_dir, fed_subdir, "global_test_data.pt")
+    if os.path.exists(t2):
+        t = t2
     if os.path.exists(t):
         _, yy = _read_pt(t)
         y_max = int(np.asarray(yy).max())
 
-    mapping, map_file = _doc_task_mapping(data_dir)
+    mapping, map_file = _doc_task_mapping(data_dir, fed_subdir)
     dung_remap = mapping is not None and y_max >= 13
 
     if dung_remap:
@@ -409,6 +417,9 @@ def load_global_test(data_dir: str, max_samples: int = 1_000_000,
                      task: Optional[int] = None, seed: int = 42):
     """Nap global test. task khac None -> loc ve cac lop DA HOC (0..n-1)."""
     path = os.path.join(data_dir, "global_test_data.pt")
+    path2 = os.path.join(data_dir, FED_SUBDIR, "global_test_data.pt")
+    if os.path.exists(path2) and not os.path.exists(path):
+        path = path2
     logger.info(f"Nap global test: {path}")
     x, y = _read_pt(path)
     logger.info(f"Global test goc: n={len(y)}")
