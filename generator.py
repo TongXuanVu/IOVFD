@@ -116,7 +116,7 @@ def sample_labels(batch, label_dist, device):
     return torch.multinomial(p / p.sum(), batch, replacement=True)
 
 
-def noisy_onehot(y, z, num_classes=NUM_GLOBAL_CLASSES):
+def noisy_onehot(y, z, num_classes=None):
     """Eq. (10): y* = (1-z, z) hoac (z, 1-z).
 
     Bai la bai toan NHI PHAN (normal/abnormal). CICIoV co 13 lop nen phai mo
@@ -124,6 +124,8 @@ def noisy_onehot(y, z, num_classes=NUM_GLOBAL_CLASSES):
     kia. Voi K=2 cong thuc nay TRUNG y nguyen Eq. (10). Day la lua chon cai
     dat, phai ghi trong bao cao.
     """
+    # None -> lay LUC GOI; tham so mac dinh bi chot luc `def`
+    num_classes = NUM_GLOBAL_CLASSES if num_classes is None else num_classes
     if z.dim() == 2:
         z = z[:, 0]
     z = z.view(-1, 1).clamp(0.0, 1.0 - 1e-6)
@@ -160,8 +162,11 @@ class Generator(nn.Module):
     chon cai dat. So khoi = 3 thi dung bai ("three stacked ... blocks").
     """
 
-    def __init__(self, num_classes=NUM_GLOBAL_CLASSES, out_dim=INPUT_LEN,
+    def __init__(self, num_classes=None, out_dim=None,
                  seq_len=8, channels=32, heads=4, n_blocks=3):
+        # None -> lay LUC GOI; tham so mac dinh bi chot luc `def`
+        out_dim = INPUT_LEN if out_dim is None else out_dim
+        num_classes = NUM_GLOBAL_CLASSES if num_classes is None else num_classes
         super().__init__()
         self.num_classes = num_classes
         self.out_dim = out_dim

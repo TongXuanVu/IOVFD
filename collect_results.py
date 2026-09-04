@@ -28,6 +28,8 @@ import sys
 
 import numpy as np
 
+# Mac dinh la CICIoV. Goi --data-dir de tu do theo bo that (IoT: 6 task,
+# tang [6,6,6,6,5,5]) — khong thi ma tran quen bi cat con 5 task.
 TASK_INCREMENTS = [3, 3, 3, 2, 2]
 NUM_TASKS = len(TASK_INCREMENTS)
 METRIC_KEYS = ["loss", "accuracy", "micro_precision", "micro_recall", "micro_f1",

@@ -13,7 +13,10 @@ INPUT_LEN = 31
 
 
 class CNN1D_IDS(nn.Module):
-    def __init__(self, input_len=INPUT_LEN, num_classes=NUM_GLOBAL_CLASSES, dropout=0.15):
+    def __init__(self, input_len=None, num_classes=None, dropout=0.15):
+        # None -> lay tu common LUC GOI (tham so mac dinh bi chot luc `def`)
+        input_len = INPUT_LEN if input_len is None else input_len
+        num_classes = NUM_GLOBAL_CLASSES if num_classes is None else num_classes
         super().__init__()
         self.input_len = input_len
         self.num_classes = num_classes

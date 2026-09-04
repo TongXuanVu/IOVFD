@@ -48,7 +48,8 @@ def main():
                    help="Thu muc chua federated_data/ va global_test_data.pt")
     p.add_argument("--out_dir", default=os.path.join(HERE, "out"))
     p.add_argument("--num_users", type=int, default=100)
-    p.add_argument("--tasks", type=int, default=5)
+    p.add_argument("--tasks", type=int, default=0,
+                   help="0 = tu do theo bo du lieu (IoV 5, IoT 6)")
     p.add_argument("--com_round", type=int, default=30, help="Round MOI task")
     p.add_argument("--local_ep", type=int, default=1)
     p.add_argument("--batch_size", type=int, default=32,
@@ -112,7 +113,11 @@ def main():
         "--out-dir", a.out_dir,
         "--clients", str(a.num_users),
         "--rounds", str(a.com_round),
-        "--tasks", "none" if a.flat else ",".join(str(t) for t in range(a.tasks)),
+        # "all" de run_sim tu lay C.NUM_TASKS SAU khi da do bo du lieu;
+        # viet cung "0,1,2,3,4" se bo mat task 6 cua bo IoT.
+        "--tasks", ("none" if a.flat else
+                    ("all" if a.tasks <= 0 else
+                     ",".join(str(t) for t in range(a.tasks)))),
         "--local-epochs", str(a.local_ep),
         "--batch-size", str(a.batch_size),
         "--lr", str(a.lr),
@@ -156,7 +161,7 @@ def main():
     print(f"  du lieu   : {a.data_dir}")
     print(f"  ket qua   : {a.out_dir}")
     print(f"  cau hinh  : {a.num_users} client | {a.tasks} task x {a.com_round} "
-          f"round = {a.tasks * a.com_round} round")
+          f"round" if a.tasks > 0 else "round/task")
     gen = ("Eq.(14)-(16): Linear -> %d x (MultiHead + Conv1D) -> Linear"
            % a.gen_blocks)
     print(f"  generator : {gen}")

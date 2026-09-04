@@ -123,6 +123,11 @@ def rounds_done(out_dir, task):
 def make_client_fn(ids, args, task, device):
     """partition-id cua Ray -> client id that -> doi tuong client cua repo."""
     def client_fn(ctx):
+        # Ray tao actor trong TIEN TRINH RIENG — o do common.py duoc import lai
+        # voi gia tri mac dinh cua CICIoV (13 lop, 31 dac trung). Khong ap lai
+        # ho so thi client se dung model sai kich thuoc tren bo IoT ma khong
+        # bao loi ro rang. apply_profile khong doc dia nen goi thoai mai.
+        C.apply_profile(getattr(args, "profile", None))
         pid = int(ctx.node_config.get("partition-id", 0))
         cid = ids[pid % len(ids)]
         # Ray chi cho actor thay GPU khi num_gpus > 0; neu khong thay phai CPU.
@@ -250,6 +255,10 @@ def main():
         logger.info("--restart: da xoa model cuc bo cua client")
     sfx_arch = f"_{args.arch}" if IS_P4 else ""
     C.setup_logging(os.path.join(args.out_dir, f"sim{sfx_arch}.log"))
+    # Tu do ho so bo du lieu (so lop / dac trung / task / remap nhan).
+    # Phai dat SAU setup_logging, khong thi dong log quan trong nhat —
+    # cho biet dang chay IoV hay IoT — khong vao duoc file log.
+    args.profile = C.init_dataset(args.data_dir, args.fed_subdir)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

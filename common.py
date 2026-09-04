@@ -14,8 +14,10 @@ Quy uoc data (khop AFSIC-IoV):
 """
 import csv
 import json
+import glob
 import logging
 import os
+import sys
 from collections import Counter, OrderedDict
 from typing import Dict, List, Optional, Tuple
 
@@ -43,10 +45,222 @@ def set_fed_subdir(name):
     FED_SUBDIR = name
 
 
+# Bo IoV va bo IoT long thu muc KHAC NHAU:
+#   IoV: <root>/federated_data{,_fewshot,_10shot}/
+#   IoT: <root>/100client/                              (full)
+#        <root>/iot100client_fewshot/federated_data_fewshot/
+#        <root>/iot100client_fewshot/federated_data_10shot/
+# Ham nay tra ve duong dan TUONG DOI so voi data_dir cua thu muc chua shard.
+BO_CUC_IOT = {
+    "federated_data":          ["100client", "federated_data"],
+    "federated_data_fewshot":  [os.path.join("iot100client_fewshot",
+                                             "federated_data_fewshot")],
+    "federated_data_10shot":   [os.path.join("iot100client_fewshot",
+                                             "federated_data_10shot")],
+}
+
+
+def tim_fed_subdir(data_dir, ten):
+    """Tim thu muc shard that su ton tai, thu ca hai bo cuc.
+
+    Tra ve duong dan tuong doi; neu khong thay thi tra lai `ten` de loi bao o
+    cho nap du lieu (co ten file cu the) chu khong im lang.
+    """
+    ung_vien = [ten] + BO_CUC_IOT.get(ten, [])
+    for u in ung_vien:
+        d = os.path.join(data_dir, u)
+        if os.path.isdir(d) and glob.glob(os.path.join(d, "client_*.pt")):
+            if u != ten:
+                logger.info(f"Bo cuc IoT: '{ten}' -> '{u}'")
+            return u
+    return ten
+
+
+# --- ho so bo du lieu -------------------------------------------------------
+# Mac dinh la CICIoV. Goi init_dataset() truoc khi dung de TU DO theo du lieu
+# that; luc do bon bien duoi day bi ghi de. Cac noi dung phai doc qua
+# `common.<TEN>` (tra cuu luc chay) chu KHONG duoc `from common import <TEN>`
+# (chot gia tri luc import, mutation khong lan toi).
 NUM_GLOBAL_CLASSES = 13
 INPUT_LEN = 31
 NUM_TASKS = 5
 TASK_INCREMENTS = [3, 3, 3, 2, 2]          # giong AFSIC-IoV / FedLiTeCAN
+
+TEN_BO = "iov"          # "iov" | "iot"
+_LABEL_LUT = None       # np.ndarray: nhan goc -> nhan tuan tu, hoac None
+TASK_LABELS = None      # list[list[int]]: nhan GOC cua tung task (chi bo IoT)
+
+
+def _doc_task_mapping(data_dir):
+    """Doc task_mapping_label_ids.json: list[list[int]] nhan goc theo tung task.
+
+    Bo IoV KHONG co file nay (nhan da tuan tu 0..12 san). Bo IoT co, va thu tu
+    task phi tuan tu nen bat buoc phai remap.
+    """
+    for p in (os.path.join(data_dir, "task_mapping_label_ids.json"),
+              os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "task_mapping_label_ids.json")):
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, list) and d and isinstance(d[0], list):
+                return d, p
+    return None, None
+
+
+def _do_so_dac_trung(data_dir, fed_subdir):
+    """Lay so cot tu MOT shard bat ky — khong doc ca file, chi lay shape."""
+    for goc in (os.path.join(data_dir, fed_subdir), data_dir):
+        for p in sorted(glob.glob(os.path.join(goc, "client_*.pt")))[:1]:
+            try:
+                x, _ = _read_pt(p)
+                return int(x.shape[1]), p
+            except Exception as e:
+                logger.warning(f"Khong doc duoc {p}: {e}")
+    t = os.path.join(data_dir, "global_test_data.pt")
+    if os.path.exists(t):
+        x, _ = _read_pt(t)
+        return int(x.shape[1]), t
+    return None, None
+
+
+def init_dataset(data_dir, fed_subdir=None):
+    """Tu do ho so bo du lieu tu chinh du lieu. Goi TRUOC moi thu khac.
+
+    - so dac trung: lay tu shape cua mot shard (khong hardcode)
+    - so lop / so task / remap: tu task_mapping_label_ids.json neu co
+
+    CAI BAY DA DUOC CHAN: file mapping cua IoT chua du id 0..33, nen neu ap
+    nham len du lieu IoV (nhan 0..12) thi MOI nhan deu tra cuu duoc va bi doi
+    am tham, khong mot loi nao duoc nem ra. Nen o day chi bat remap khi nhan
+    THUC TE vuot qua pham vi cua bo IoV.
+    """
+    global NUM_GLOBAL_CLASSES, INPUT_LEN, NUM_TASKS, TASK_INCREMENTS
+    global TEN_BO, _LABEL_LUT, TASK_LABELS, FED_SUBDIR
+
+    if fed_subdir is None:
+        fed_subdir = FED_SUBDIR
+    fed_subdir = tim_fed_subdir(data_dir, fed_subdir)
+    FED_SUBDIR = fed_subdir
+    n_feat, nguon = _do_so_dac_trung(data_dir, fed_subdir)
+
+    y_max = -1
+    t = os.path.join(data_dir, "global_test_data.pt")
+    if os.path.exists(t):
+        _, yy = _read_pt(t)
+        y_max = int(np.asarray(yy).max())
+
+    mapping, map_file = _doc_task_mapping(data_dir)
+    dung_remap = mapping is not None and y_max >= 13
+
+    if dung_remap:
+        TASK_LABELS = mapping
+        TASK_INCREMENTS = [len(t_) for t_ in mapping]
+        NUM_TASKS = len(mapping)
+        phang = [c for t_ in mapping for c in t_]
+        NUM_GLOBAL_CLASSES = len(phang)
+        lut = np.full(max(phang) + 1, -1, dtype=np.int64)
+        for moi, goc in enumerate(phang):
+            lut[goc] = moi
+        _LABEL_LUT = lut
+        TEN_BO = "iot"
+    else:
+        TASK_LABELS, _LABEL_LUT, TEN_BO = None, None, "iov"
+        if mapping is not None:
+            logger.warning(
+                f"Co {map_file} nhung nhan lon nhat trong tap test chi la "
+                f"{y_max} (< 13) -> KHONG remap. Ap bang cua IoT len du lieu "
+                f"IoV se doi nhan am tham vi id 0..12 deu nam trong bang.")
+
+    if n_feat:
+        INPUT_LEN = n_feat
+
+    n_mod = _dong_bo_module()
+    logger.info(
+        f"Ho so bo du lieu: {TEN_BO} | {NUM_GLOBAL_CLASSES} lop | "
+        f"{NUM_TASKS} task {TASK_INCREMENTS} | {INPUT_LEN} dac trung"
+        + (f" (do tu {os.path.basename(nguon)})" if nguon else " (mac dinh)")
+        + (f" | remap nhan theo {os.path.basename(map_file)}" if dung_remap else "")
+        + f" | dong bo {n_mod} bien qua cac module")
+    return profile_hien_tai()
+
+
+def _dong_bo_module():
+    """Ghi gia tri vua do duoc vao MOI module cua repo da import.
+
+    Can thiet vi rat nhieu file lam `from common import NUM_GLOBAL_CLASSES`
+    hoac `from model_cnn1d import INPUT_LEN` — kieu import nay CHOT gia tri
+    ngay luc import, nen sua bien o common sau do khong lan toi. Duyet
+    sys.modules va ghi de attribute cung ten, chi trong pham vi thu muc repo.
+    """
+    goc = os.path.dirname(os.path.abspath(__file__))
+    ten = ("NUM_GLOBAL_CLASSES", "INPUT_LEN", "NUM_TASKS", "TASK_INCREMENTS")
+    gia_tri = (NUM_GLOBAL_CLASSES, INPUT_LEN, NUM_TASKS, TASK_INCREMENTS)
+    n = 0
+    for mod in list(sys.modules.values()):
+        f = getattr(mod, "__file__", None)
+        if not f or os.path.dirname(os.path.abspath(f)) != goc:
+            continue
+        for k, v in zip(ten, gia_tri):
+            if hasattr(mod, k):
+                setattr(mod, k, v)
+                n += 1
+    return n
+
+
+def profile_hien_tai():
+    """Ho so gon nhe de chuyen sang tien trinh con (Ray actor)."""
+    return dict(ten=TEN_BO, n_classes=NUM_GLOBAL_CLASSES, n_tasks=NUM_TASKS,
+                increments=list(TASK_INCREMENTS), n_features=INPUT_LEN,
+                task_labels=TASK_LABELS, remap=_LABEL_LUT is not None,
+                fed_subdir=FED_SUBDIR)
+
+
+def apply_profile(d):
+    """Ap ho so da tinh san — KHONG doc dia.
+
+    Ray tao actor trong tien trinh RIENG, o do common.py duoc import lai voi
+    gia tri mac dinh cua CICIoV. Neu khong goi ham nay trong worker, client se
+    dung model 13 lop tren du lieu 34 lop ma khong bao loi ro rang.
+    Goi init_dataset() trong worker thi dung, nhung phai doc mot shard moi lan
+    tao client (100 client x 150 round = 15000 lan doc dia thua).
+    """
+    global NUM_GLOBAL_CLASSES, INPUT_LEN, NUM_TASKS, TASK_INCREMENTS
+    global TEN_BO, _LABEL_LUT, TASK_LABELS, FED_SUBDIR
+    if not d:
+        return
+    NUM_GLOBAL_CLASSES = d["n_classes"]
+    INPUT_LEN = d["n_features"]
+    NUM_TASKS = d["n_tasks"]
+    TASK_INCREMENTS = list(d["increments"])
+    TEN_BO = d.get("ten", "iov")
+    TASK_LABELS = d.get("task_labels")
+    if d.get("fed_subdir"):
+        FED_SUBDIR = d["fed_subdir"]
+    if d.get("remap") and TASK_LABELS:
+        phang = [c for t_ in TASK_LABELS for c in t_]
+        lut = np.full(max(phang) + 1, -1, dtype=np.int64)
+        for moi, goc in enumerate(phang):
+            lut[goc] = moi
+        _LABEL_LUT = lut
+    else:
+        _LABEL_LUT = None
+    _dong_bo_module()
+
+
+def remap_labels(y):
+    """Nhan goc -> nhan tuan tu theo thu tu task. No-op voi bo da tuan tu."""
+    if _LABEL_LUT is None:
+        return y
+    y = np.asarray(y)
+    if y.size and int(y.max()) >= len(_LABEL_LUT):
+        raise ValueError(f"Nhan {int(y.max())} vuot ngoai bang remap "
+                         f"({len(_LABEL_LUT)} muc)")
+    out = _LABEL_LUT[y.astype(np.int64)]
+    if (out < 0).any():
+        raise ValueError(f"Nhan {sorted(set(y[out < 0].tolist()))} khong co "
+                         f"trong task_mapping_label_ids.json")
+    return out
 
 METRIC_KEYS = [
     "loss", "accuracy",
@@ -77,8 +291,19 @@ def load_class_names(data_dir: str) -> List[str]:
             mapping = json.load(f)
         names = [None] * len(mapping)
         for name, idx in mapping.items():
-            names[int(idx)] = name
-        return [n if n is not None else f"class_{i}" for i, n in enumerate(names)]
+            i = int(idx)
+            if i < len(names):
+                names[i] = name
+        names = [n if n is not None else f"class_{i}" for i, n in enumerate(names)]
+        if _LABEL_LUT is not None:
+            # class_mapping.json danh so theo nhan GOC; sau remap thu tu lop da
+            # doi, khong sap lai thi confusion matrix gan sai ten cho moi o.
+            phang = [c for t_ in (TASK_LABELS or []) for c in t_]
+            names = [names[g] if g < len(names) else f"class_{g}" for g in phang]
+        return names
+    if _LABEL_LUT is not None:
+        # Ten mac dinh duoi day la cua CICIoV — dung cho bo khac la sai ten.
+        return [f"class_{i}" for i in range(NUM_GLOBAL_CLASSES)]
     return list(FALLBACK_CLASS_NAMES)
 
 
@@ -147,6 +372,7 @@ def load_client_data(data_dir: str, client_id: int, task: Optional[int],
         raise FileNotFoundError(
             f"Client {client_id} khong co file nao trong {fed_dir}")
 
+    ys = [remap_labels(yi) for yi in ys]        # bo IoT: nhan goc -> tuan tu
     x = np.concatenate(xs)
     y = np.concatenate(ys)
     del xs, ys
@@ -186,6 +412,7 @@ def load_global_test(data_dir: str, max_samples: int = 1_000_000,
     logger.info(f"Nap global test: {path}")
     x, y = _read_pt(path)
     logger.info(f"Global test goc: n={len(y)}")
+    y = remap_labels(y)          # phai remap TRUOC khi loc `y < n_cls`
     if task is not None:
         n_cls = learned_classes(task)
         keep = y < n_cls
@@ -210,8 +437,17 @@ def make_loader(x: np.ndarray, y: np.ndarray, batch_size: int, shuffle: bool = T
         batch_size=batch_size, shuffle=shuffle, drop_last=False)
 
 
-def make_focal_alpha(y: np.ndarray, num_classes: int = NUM_GLOBAL_CLASSES):
-    """alpha = sqrt(N / n_c) — giong FedLiTeCAN."""
+def make_focal_alpha(y: np.ndarray, num_classes: int = None):
+    """alpha = sqrt(N / n_c) — giong FedLiTeCAN.
+
+    num_classes=None -> lay NUM_GLOBAL_CLASSES LUC GOI. Truoc day day la
+    gia tri mac dinh cua tham so, ma Python chot no ngay luc `def` — nen
+    doi bo du lieu xong van sinh ra vector alpha 13 phan tu cho model 34
+    lop, va torch nem loi 'weight tensor should be defined either for all
+    34 classes or no classes'.
+    """
+    if num_classes is None:
+        num_classes = NUM_GLOBAL_CLASSES
     cnt = Counter(y.tolist())
     total = len(y)
     return torch.tensor(

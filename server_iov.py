@@ -67,7 +67,7 @@ class IoVFDStrategy(fl.server.strategy.FedAvg):
                  beta_div: float = 1.0, beta_adv: float = 0.0,
                  lambda1: float = 0.2, fedavg_init: bool = False,
                  weighted_ensemble: bool = False,
-                 n_classes: int = NUM_GLOBAL_CLASSES, **kwargs):
+                 n_classes: int = None, **kwargs):
         super().__init__(**kwargs)
         self.model = model
         self.generator = generator
@@ -82,10 +82,13 @@ class IoVFDStrategy(fl.server.strategy.FedAvg):
         self.T = temperature
         self.beta_div = beta_div
         self.beta_adv = beta_adv
+        # None -> lay LUC KHOI TAO; tham so mac dinh bi Python chot luc `def`,
+        # nen doi sang bo IoT xong van con 13 va noisy_onehot sinh y* 13 cot
+        # cho generator 34 cot -> "mat1 and mat2 shapes cannot be multiplied".
+        self.n_classes = NUM_GLOBAL_CLASSES if n_classes is None else n_classes
         self.weighted_ensemble = weighted_ensemble
         self.lambda1 = lambda1              # Eq. (26), bai dat 0.2
         self.fedavg_init = fedavg_init
-        self.n_classes = n_classes
         self.label_dist = None              # Eq. (9), gop tu label_counts client
         self.opt_g = optim.Adam(generator.parameters(), lr=lr_g, betas=(0.5, 0.999))
         self.lr_s = lr_s
