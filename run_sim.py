@@ -60,6 +60,28 @@ logger = logging.getLogger(__name__)
 # thai ra dia (--state-dir) nen chay simulation duoc. Kiem chung bang metric
 # `resumed_local` server ghi ra moi round: tu round 2 phai bang so client.
 
+
+def ray_init_args():
+    """Make repository modules importable inside Ray worker processes.
+
+    Ray actors do not necessarily inherit the driver's current working
+    directory or ``sys.path`` (notably on Kaggle).  ``working_dir`` ships the
+    code to the workers, while ``PYTHONPATH`` also covers imports from the
+    optional sibling P1 checkout.
+    """
+    paths = [ROOT]
+    if os.path.isdir(_P1):
+        paths.append(_P1)
+    inherited = os.environ.get("PYTHONPATH")
+    if inherited:
+        paths.append(inherited)
+    return {
+        "runtime_env": {
+            "working_dir": ROOT,
+            "env_vars": {"PYTHONPATH": os.pathsep.join(paths)},
+        }
+    }
+
 if IS_P3:
     from client_iov import IoVFDClient as ClientCls            # noqa: E402
     from model_cnn1d import (CNN1D_IDS, INPUT_LEN,             # noqa: E402
@@ -376,6 +398,7 @@ def main():
             strategy=strategy,
             client_resources={"num_cpus": args.actor_cpus,
                               "num_gpus": args.actor_gpus},
+            ray_init_args=ray_init_args(),
         )
         start_round += remaining
 
