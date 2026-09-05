@@ -101,6 +101,8 @@ def _doc_task_mapping(data_dir, fed_subdir=None):
     for p in (os.path.join(data_dir, "task_mapping_label_ids.json"),
               os.path.join(data_dir, fed_subdir, "task_mapping_label_ids.json"),
               os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "data", "task_mapping_label_ids.json"),
+              os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "task_mapping_label_ids.json")):
         if os.path.exists(p):
             with open(p, encoding="utf-8") as f:
@@ -108,6 +110,28 @@ def _doc_task_mapping(data_dir, fed_subdir=None):
             if isinstance(d, list) and d and isinstance(d[0], list):
                 return d, p
     return None, None
+
+
+def _max_label_in_data(data_dir, fed_subdir):
+    """Find a high original label without loading the whole dataset."""
+    paths = []
+    for p in (os.path.join(data_dir, "global_test_data.pt"),
+              os.path.join(data_dir, fed_subdir, "global_test_data.pt")):
+        if os.path.exists(p):
+            paths.append(p)
+    paths.extend(glob.glob(os.path.join(data_dir, fed_subdir, "client_*.pt")))
+    paths.extend(glob.glob(os.path.join(data_dir, "client_*.pt")))
+    maximum = -1
+    for p in dict.fromkeys(paths):
+        try:
+            _, y = _read_pt(p)
+            if y.size:
+                maximum = max(maximum, int(np.asarray(y).max()))
+                if maximum >= 13:
+                    return maximum
+        except Exception as e:
+            logger.warning(f"Khong doc duoc nhan trong {p}: {e}")
+    return maximum
 
 
 def _do_so_dac_trung(data_dir, fed_subdir):
@@ -149,23 +173,27 @@ def init_dataset(data_dir, fed_subdir=None):
     FED_SUBDIR = fed_subdir
     n_feat, nguon = _do_so_dac_trung(data_dir, fed_subdir)
 
-    y_max = -1
-    t = os.path.join(data_dir, "global_test_data.pt")
-    t2 = os.path.join(data_dir, fed_subdir, "global_test_data.pt")
-    if os.path.exists(t2):
-        t = t2
-    if os.path.exists(t):
-        _, yy = _read_pt(t)
-        y_max = int(np.asarray(yy).max())
+    y_max = _max_label_in_data(data_dir, fed_subdir)
 
     mapping, map_file = _doc_task_mapping(data_dir, fed_subdir)
-    dung_remap = mapping is not None and y_max >= 13
+    high_labels = y_max >= 13
+    if high_labels and mapping is None:
+        raise FileNotFoundError(
+            "Phat hien nhan goc IoT (id lon nhat %d), nhung khong tim thay "
+            "task_mapping_label_ids.json. Dat file trong data_dir hoac "
+            "IOVFD/data/ truoc khi chay." % y_max)
+    dung_remap = mapping is not None and high_labels
 
     if dung_remap:
         TASK_LABELS = mapping
         TASK_INCREMENTS = [len(t_) for t_ in mapping]
         NUM_TASKS = len(mapping)
         phang = [c for t_ in mapping for c in t_]
+        if (not phang or len(set(phang)) != len(phang)
+                or min(phang) < 0 or max(phang) < 13):
+            raise ValueError(
+                f"Mapping IoT khong hop le trong {map_file}: can cac id goc "
+                "duy nhat, gom it nhat mot id lon hon 12.")
         NUM_GLOBAL_CLASSES = len(phang)
         lut = np.full(max(phang) + 1, -1, dtype=np.int64)
         for moi, goc in enumerate(phang):

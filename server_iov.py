@@ -345,7 +345,7 @@ def main():
     p.add_argument("--out-dir", type=str, default=DEFAULT_OUT_DIR)
     p.add_argument("--address", type=str, default="0.0.0.0:8083")
     p.add_argument("--test-samples", type=int, default=1_000_000)
-    p.add_argument("--task", type=int, default=None, choices=range(C.NUM_TASKS))
+    p.add_argument("--task", type=int, default=None)
     p.add_argument("--ckpt", type=str, default=None)
     p.add_argument("--cm-every", type=int, default=0,
                    help="Ghi confusion matrix moi N round (0 = chi cuoi task)")
@@ -354,6 +354,9 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
     C.setup_logging(os.path.join(args.out_dir, "server.log"))
+    C.init_dataset(args.data_dir)
+    if args.task is not None and not 0 <= args.task < C.NUM_TASKS:
+        p.error(f"--task phai trong khoang 0..{C.NUM_TASKS - 1}")
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
