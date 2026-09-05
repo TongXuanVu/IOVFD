@@ -260,6 +260,11 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     args = p.parse_args()
 
+    # Ray actors may resolve relative paths under their own runtime working
+    # directory. Keep all shared artifacts on the driver's filesystem so
+    # checkpoints, metrics, and IoVFD client_state survive actor recreation.
+    args.data_dir = os.path.abspath(args.data_dir)
+    args.out_dir = os.path.abspath(args.out_dir)
     C.set_fed_subdir(args.fed_subdir)
     if args.actor_gpus < 0:                 # tu chia GPU cho so actor song song
         n_gpu = torch.cuda.device_count()
