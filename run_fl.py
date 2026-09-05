@@ -51,6 +51,7 @@ PROJECTS = {
     "p4": ("P4-SDNFL-IDS", 8084),
 }
 NUM_TASKS = 5
+FED_SUBDIR = "federated_data"
 
 # Hai kieu bo tri thu muc:
 #   - monorepo Rebuild-IOV : server_iov.py nam trong P1-VANFED-IDS/, P2-FEDIOV/...
@@ -61,7 +62,7 @@ STANDALONE = os.path.exists(os.path.join(ROOT, "server_iov.py"))
 
 def clients_with_data(data_dir, client_ids, task):
     """Loc ra nhung client co file .pt cho task nay (task=None -> can it nhat 1 file)."""
-    fed = os.path.join(data_dir, "federated_data")
+    fed = os.path.join(data_dir, FED_SUBDIR)
     ok = []
     for cid in client_ids:
         if task is None:
@@ -276,10 +277,15 @@ def main():
         port = args.port or default_port
     args.out_dir = os.path.abspath(args.out_dir or os.path.join(pdir, "out"))
     args.data_dir = os.path.abspath(args.data_dir)
+    if STANDALONE:
+        import common as C
+        profile = C.init_dataset(args.data_dir)
+        globals()["NUM_TASKS"] = profile["n_tasks"]
+        globals()["FED_SUBDIR"] = profile["fed_subdir"]
     os.makedirs(args.out_dir, exist_ok=True)
 
-    if not os.path.isdir(os.path.join(args.data_dir, "federated_data")):
-        sys.exit(f"Khong thay {args.data_dir}/federated_data — sai --data-dir?")
+    if not os.path.isdir(os.path.join(args.data_dir, FED_SUBDIR)):
+        sys.exit(f"Khong thay {args.data_dir}/{FED_SUBDIR} — sai --data-dir?")
 
     if args.tasks.strip().lower() == "none":
         tasks = [None]

@@ -218,10 +218,13 @@ def main():
     p.add_argument("--temperature", type=float, default=3.0)
     p.add_argument("--no-personalized", action="store_true",
                    help="Ghi de local bang global moi round (thanh FedAvg + KD)")
-    p.add_argument("--task", type=int, default=None, choices=range(C.NUM_TASKS))
+    p.add_argument("--task", type=int, default=None)
     args = p.parse_args()
 
     C.setup_logging()
+    C.init_dataset(args.data_dir)
+    if args.task is not None and not 0 <= args.task < C.NUM_TASKS:
+        p.error(f"--task phai trong khoang 0..{C.NUM_TASKS - 1}")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     client = IoVFDClient(args.client_id, args.data_dir, device, args.max_samples,
                          args.batch_size, args.task, args.lr, args.dropout,
