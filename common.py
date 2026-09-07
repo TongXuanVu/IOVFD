@@ -441,13 +441,50 @@ def stratified_subsample(x, y, max_samples, seed=42):
     return x[keep], y[keep]
 
 
+TEN_FILE_TEST = "global_test_data.pt"
+
+
+def tim_global_test(data_dir, fed_subdir=None):
+    """Tim global_test_data.pt qua nhieu bo cuc, tra ve duong dan dau tien co that.
+
+    Bo IoV: file nam ngay tai data_dir -> ung vien dau tien trung ngay.
+    Bo IoT: file nam trong bo cuc FULL ('100client/'), con hai bo cuc bien the
+    ('iot100client_fewshot/federated_data_{fewshot,10shot}') KHONG kem ban sao
+    nao — chay 1% hay 10-shot van phai danh gia tren dung tap test do, nen phai
+    muon file cua ban full. Chi thu data_dir va data_dir/FED_SUBDIR nhu truoc
+    thi hai kich ban bien the cua IoT luon truot.
+    """
+    if fed_subdir is None:
+        fed_subdir = FED_SUBDIR
+    uv = [os.path.join(data_dir, TEN_FILE_TEST)]
+    p = fed_subdir or ""
+    while p and p not in (".", os.sep):                 # fed_subdir + moi cha
+        uv.append(os.path.join(data_dir, p, TEN_FILE_TEST))
+        p = os.path.dirname(p)
+    for ds in BO_CUC_IOT.values():                      # cac bo cuc IoT khac
+        for d in ds:
+            uv.append(os.path.join(data_dir, d, TEN_FILE_TEST))
+            cha = os.path.dirname(d)
+            if cha:
+                uv.append(os.path.join(data_dir, cha, TEN_FILE_TEST))
+    uv += sorted(glob.glob(os.path.join(data_dir, "*", TEN_FILE_TEST)))
+    da_thu = []
+    for c in uv:
+        c = os.path.normpath(c)
+        if c in da_thu:
+            continue
+        da_thu.append(c)
+        if os.path.exists(c):
+            return c
+    raise FileNotFoundError(
+        "Khong tim thay " + TEN_FILE_TEST + ". Da thu:\n  "
+        + "\n  ".join(da_thu))
+
+
 def load_global_test(data_dir: str, max_samples: int = 1_000_000,
                      task: Optional[int] = None, seed: int = 42):
     """Nap global test. task khac None -> loc ve cac lop DA HOC (0..n-1)."""
-    path = os.path.join(data_dir, "global_test_data.pt")
-    path2 = os.path.join(data_dir, FED_SUBDIR, "global_test_data.pt")
-    if os.path.exists(path2) and not os.path.exists(path):
-        path = path2
+    path = tim_global_test(data_dir)
     logger.info(f"Nap global test: {path}")
     x, y = _read_pt(path)
     logger.info(f"Global test goc: n={len(y)}")
